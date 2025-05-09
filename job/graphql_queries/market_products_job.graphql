@@ -1,0 +1,60 @@
+mutation MarketProductsJob {
+    bulkOperationRunQuery(
+        query: """
+        {
+            publications(catalogType: MARKET) {
+                edges {
+                    node {
+                        id
+                        catalog {
+                            ... on MarketCatalog {
+                                publication {
+                                    id
+                                    name
+                                    products {
+                                        edges {
+                                            node {
+                                                id
+                                                title
+                                                handle
+                                            }
+                                        }
+                                    }
+                                }
+                                markets {
+                                    edges {
+                                        node {
+                                            id
+                                            handle
+                                            name
+                                            webPresences {
+                                                edges {
+                                                    node {
+                                                        rootUrls {
+                                                            url
+                                                            locale
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+    ) {
+        bulkOperation {
+            id
+            status
+        }
+        userErrors {
+            field
+            message
+        }
+    }
+}
