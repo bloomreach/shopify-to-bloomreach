@@ -16,6 +16,39 @@ def hostname_from_environment(environment="staging"):
     raise Exception("Invalid environment: %s" % environment)
   return hostnames[environment]
 
+def patch_catalog_delta(
+        patch_fp,
+        account_id="",
+        environment_name="",
+        catalog_name="",
+        token=""):
+
+  dc_endpoint = "dataconnect/api/v1"
+
+  hostname = hostname_from_environment(environment_name)
+
+  account_endpoint = f"accounts/{account_id}"
+  catalog_endpoint = f"catalogs/{catalog_name}"
+
+  url = f"https://{hostname}/{dc_endpoint}/{account_endpoint}/{catalog_endpoint}/products"
+
+  headers = {
+    "Content-Type": "application/json-patch+jsonlines",
+    "Content-Encoding": "gzip",
+    "Authorization": "Bearer " + token
+  }
+
+  feed_job_id = ""
+  with open(patch_fp, 'rb') as payload:
+    response = requests.patch(url, data=payload, headers=headers)  # Use PATCH instead of PUT
+    response.raise_for_status()
+
+    logger.info("Feed API: HTTP PATCH: %s", response.url)
+    logger.info("Feed Job response: %s", response.json())
+    job_id = response.json()["jobId"]
+
+  polling.poll(lambda: br_check_status(job_id=job_id, environment_name=environment_name, token=token), step=10, timeout=7200)
+
 
 def patch_catalog(
     patch_fp,
@@ -133,14 +166,29 @@ if __name__ == '__main__':
     required=not getenv("BR_API_TOKEN")
   )
 
+  parser.add_argument(
+    "--delta-mode",
+    help="Use PATCH instead of PUT for delta feeds",
+    action="store_true",
+    default=False
+  )
+
   args = parser.parse_args()
   fp_in = args.input_file
   environment_name = args.br_environment
   account_id = args.br_account_id
   catalog_name = args.br_catalog_name
   api_token = args.br_api_token
+  delta_mode = getenv("DELTA_MODE", "false").lower() == "true" or args.delta_mode
 
-  patch_catalog(fp_in, 
+  if delta_mode:
+    patch_catalog_delta(fp_in,
+         environment_name=environment_name,
+         account_id=account_id,
+         catalog_name=catalog_name,
+         token=api_token)
+  else:
+    patch_catalog(fp_in,
        environment_name=environment_name,
        account_id=account_id,
        catalog_name=catalog_name,

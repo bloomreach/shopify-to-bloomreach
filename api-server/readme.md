@@ -9,6 +9,7 @@ DiSh provides a REST API for starting and monitoring Shopify data ingestion jobs
 ## Features
 
 - Create and monitor Docker containers for Shopify data ingestion
+- **Delta sync support** for incremental data updates based on timestamps
 - RESTful API with OpenAPI documentation
 - Token-based authentication
 - Configurable Docker settings
@@ -94,6 +95,35 @@ For multi-market configurations:
 }
 ```
 
+### Create Delta Job
+
+Creates a new Docker container to perform incremental data sync based on a start timestamp.
+
+```
+POST /dish/createDeltaJob
+```
+
+Request body:
+```json
+{
+  "shopifyUrl": "your-store.myshopify.com",
+  "shopifyPat": "your-shopify-personal-access-token",
+  "brEnvironmentName": "production",
+  "brAccountId": "your-br-account-id",
+  "brCatalogName": "your-br-catalog-name",
+  "brApiToken": "your-br-api-token",
+  "brMultiMarket": false,
+  "startDate": "2025-07-16T09:50:00Z"
+}
+```
+
+**Delta Job Features:**
+- Processes only products updated after the specified `startDate`
+- Uses ISO 8601 timestamp format (UTC recommended)
+- Automatically sets `DELTA_MODE=true` environment variable
+- Optimized for incremental updates and reduced processing time
+- Supports timezone-aware timestamps (e.g., `2025-07-16T09:50:00+02:00`)
+
 ### Check Job Status
 
 Retrieves the current status of a job.
@@ -124,6 +154,40 @@ Parameters:
 - Optimized container lookup for better performance
 - Detailed failure reporting for troubleshooting
 
+## Delta Sync Implementation
+
+The delta sync functionality allows for efficient incremental updates by processing only products that have been modified since a specific timestamp.
+
+### How Delta Sync Works
+
+1. **Timestamp Filtering**: Uses Shopify GraphQL query with `updated_at` filter:
+   ```graphql
+   products (query: "updated_at:>'2025-07-16T09:50:00Z'") {
+     edges {
+       node {
+         id
+         handle
+         title
+         updatedAt
+       }
+     }
+   }
+   ```
+
+2. **Environment Variables**: The system automatically sets:
+   - `DELTA_MODE=true`
+   - `START_DATE=2025-07-16T09:50:00Z` (ISO 8601 format, truncated to seconds)
+
+3. **Timezone Support**: Accepts timestamps with timezone offsets:
+   - UTC: `2025-07-16T09:50:00Z`
+   - With timezone: `2025-07-16T09:50:00+02:00`
+
+### Best Practices for Delta Sync
+
+- Use UTC timestamps when possible for consistency
+- Store the last successful sync timestamp to use for the next delta job
+- Consider running delta jobs frequently (hourly/daily) to keep data fresh
+- Use full sync jobs periodically to ensure data integrity
 
 ## Security
 
@@ -151,6 +215,10 @@ Required for all jobs:
 Required for multi-market jobs:
 - `SHOPIFY_MARKET`
 - `SHOPIFY_LANGUAGE`
+
+**Delta-specific environment variables:**
+- `DELTA_MODE`: Set to `true` for delta sync jobs
+- `START_DATE`: ISO 8601 timestamp indicating the start of the sync window
 
 ## Job Statuses
 
@@ -198,6 +266,7 @@ mvn test
 - **Error Handling**: The system handles individual job failures gracefully without impacting other jobs
 - **Connection Pooling**: Configure the `maxConnections` property based on your environment's needs
 - **Resource Management**: Scheduled cleanup of old containers prevents resource leaks and improves system stability
+- **Delta Sync Performance**: Use delta jobs for faster processing when only recent changes are needed
 
 ## API Documentation
 
@@ -216,6 +285,7 @@ docker build -t dish-app .
 ```bash
 docker run -d -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock dish-app
 ```
+
 ## License
 
 Proprietary - Bloomreach, Inc.

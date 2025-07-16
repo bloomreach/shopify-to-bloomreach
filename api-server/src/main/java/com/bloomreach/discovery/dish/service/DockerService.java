@@ -22,6 +22,9 @@ import org.springframework.retry.annotation.Retryable;
 
 
 import java.text.MessageFormat;
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
@@ -61,7 +64,7 @@ public class DockerService {
                                 .withMemorySwappiness(10L)
                                 .withOomScoreAdj(-500)
                                 .withKernelMemory(convertMemorySizeToBytes("2GB"))
-//                                .withBinds(new Bind(properties.getHostPath(), new Volume(properties.getExportPath())))
+                                .withBinds(new Bind(properties.getHostPath(), new Volume(properties.getExportPath())))
                         )
                         .withName(name)
                         .exec();
@@ -89,7 +92,8 @@ public class DockerService {
                 "BR_ACCOUNT_ID=" + config.brAccountId(),
                 "BR_CATALOG_NAME=" + config.brCatalogName(),
                 "BR_API_TOKEN=" + config.brApiToken(),
-                "BR_MULTI_MARKET=" + config.brMultiMarket()
+                "BR_MULTI_MARKET=" + config.brMultiMarket(),
+                "AUTO_INDEX=" + config.autoIndex()  // Add this line
         ));
 
         // Add market and language variables only when multi-market is enabled
@@ -99,6 +103,56 @@ public class DockerService {
                     "SHOPIFY_LANGUAGE=" + config.shopifyLanguage()
             ));
         }
+
+        return env;
+    }
+
+    public String createDeltaContainer(DishConfigDTO config, Instant startDate) {
+        try {
+            List<String> environmentVariables = createDeltaEnvironmentVariables(config, startDate);
+            String name = generateContainerName(config);
+
+            boolean jobRunning = isJobRunning(generateContainerPartialName(config));
+
+            if (!jobRunning) {
+                log.info("Creating delta container with name: {} and start date: {}", name, startDate);
+
+                CreateContainerResponse container = dockerClient.createContainerCmd(properties.getImageTag())
+                        .withEnv(environmentVariables)
+                        .withHostConfig(HostConfig.newHostConfig()
+                                .withMemory(convertMemorySizeToBytes("4GB"))
+                                .withMemorySwap(convertMemorySizeToBytes("4GB"))
+                                .withMemorySwappiness(10L)
+                                .withOomScoreAdj(-500)
+                                .withKernelMemory(convertMemorySizeToBytes("2GB"))
+                                .withBinds(new Bind(properties.getHostPath(), new Volume(properties.getExportPath())))
+                        )
+                        .withName(name)
+                        .exec();
+
+                log.debug("Delta container created with ID: {}", container.getId());
+
+                dockerClient.startContainerCmd(container.getId()).exec();
+                log.info("Delta container started successfully: {}", name);
+
+                return name;
+            }
+            throw new IllegalStateException("Job is already RUNNING, not allowed to have multiple jobs on the same catalog");
+
+        } catch (Exception e) {
+            log.error("Failed to create Docker delta container", e);
+            throw new DockerServiceException("Failed to create Docker delta container", e);
+        }
+    }
+
+    private List<String> createDeltaEnvironmentVariables(DishConfigDTO config, Instant startDate) {
+        List<String> env = new ArrayList<>(createEnvironmentVariables(config));
+
+        String formattedStartDate = DateTimeFormatter.ISO_INSTANT.format(startDate.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
+        env.add("DELTA_MODE=true");
+        env.add("START_DATE=" + formattedStartDate);
+
+        log.info("Delta job start date formatted as: {}", formattedStartDate);
 
         return env;
     }
@@ -311,7 +365,8 @@ public class DockerService {
         return switch (unit) {
             case "MB" -> (long) (value * 1024 * 1024);
             case "GB" -> (long) (value * 1024 * 1024 * 1024);
-            default -> throw new IllegalArgumentException("Unsupported memory unit: " + unit + ". Only MB and GB are supported.");
+            default ->
+                    throw new IllegalArgumentException("Unsupported memory unit: " + unit + ". Only MB and GB are supported.");
         };
     }
 

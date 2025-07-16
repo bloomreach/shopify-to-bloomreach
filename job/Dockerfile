@@ -23,6 +23,9 @@ ENV LOGLEVEL="INFO"
 ENV BR_MULTI_MARKET=""
 ENV SHOPIFY_MARKET=""
 ENV SHOPIFY_LANGUAGE=""
+ENV AUTO_INDEX="false"
+ENV DELTA_MODE="false"
+ENV START_DATE=""
 
 CMD python main.py \
     --shopify-url "$SHOPIFY_URL" \
@@ -34,4 +37,6 @@ CMD python main.py \
     --output-dir "$BR_OUTPUT_DIR" \
     $([ "$BR_MULTI_MARKET" = "true" ] && echo "--multi-market") \
     $([ -n "$SHOPIFY_MARKET" ] && echo "--shopify-market $SHOPIFY_MARKET") \
-    $([ -n "$SHOPIFY_LANGUAGE" ] && echo "--shopify-language $SHOPIFY_LANGUAGE")
+    $([ -n "$SHOPIFY_LANGUAGE" ] && echo "--shopify-language $SHOPIFY_LANGUAGE") \
+    $([ "$AUTO_INDEX" = "true" ] && echo "--auto-index") \
+    $([ "$DELTA_MODE" = "true" ] && echo "--delta-mode")

@@ -4,13 +4,15 @@ from datetime import datetime
 from os import getenv
 from sys import stdout
 import argparse
+import gzip
 
 from bloomreach_generics import main as brGenerics
 from bloomreach_products import main as brProducts
-from feed import patch_catalog
+from feed import patch_catalog, patch_catalog_delta
 from shopify_products import main as shopifyProducts
 from patch import main as brPatch
 from graphql import get_shopify_jsonl_fp
+from index import run_index
 
 # Define logger
 loglevel = getenv('LOGLEVEL', 'INFO').upper()
@@ -29,11 +31,35 @@ def main(shopify_url="",
          output_dir="/export",
          multi_market=False,
          shopify_market=None,
-         shopify_language=None):
-
+         shopify_language=None,
+         auto_index=False,
+         delta_mode=False,
+         start_date=None):
 
   run_num = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
   api_version = '2025-04'
+
+  # Add timezone debugging - fix the datetime usage
+  now_utc = datetime.utcnow()  # Remove the extra .datetime
+  now_local = datetime.now()   # Remove the extra .datetime
+
+  logging.info(f"Container UTC time: {now_utc}")
+  logging.info(f"Container local time: {now_local}")
+  logging.info(f"Time difference: {(now_local - now_utc).total_seconds()} seconds")
+
+  # Log delta mode info
+  if delta_mode:
+    logging.info(f"Running in DELTA mode with start_date: {start_date}")
+    # Parse and log the start_date for verification
+    try:
+      parsed_start = datetime.fromisoformat(start_date.replace('Z', '+00:00'))
+      logging.info(f"Parsed start_date as UTC: {parsed_start}")
+      logging.info(f"Time since start_date: {(now_utc - parsed_start.replace(tzinfo=None)).total_seconds()} seconds")
+    except Exception as e:
+      logging.error(f"Failed to parse start_date: {e}")
+  else:
+    logging.info("Running in FULL mode")
+
   logging.info(f"run_num: {run_num}")
   logging.info(f"api_version: {api_version}")
   logging.info(f"shopify_url: {shopify_url}")
@@ -53,13 +79,25 @@ def main(shopify_url="",
       shopify_url, api_version, shopify_pat, output_dir,
       run_num=run_num, multiMarket=True,
       shopify_market=shopify_market,
-      shopify_language=shopify_language
+      shopify_language=shopify_language,
+      start_date=start_date if delta_mode else None
     )
   else:
     shopify_jsonl_fp, job_id = get_shopify_jsonl_fp(
       shopify_url, api_version, shopify_pat, output_dir,
-      run_num=run_num
+      run_num=run_num,
+      start_date=start_date if delta_mode else None
     )
+
+  try:
+    with gzip.open(shopify_jsonl_fp, 'rb') as f:
+      first_line = f.readline()
+      if not first_line:
+        logging.info("No products to process in delta feed, exiting successfully")
+        return
+  except Exception as e:
+    logging.error("Failed to check if products file is empty: %s", e)
+    return
 
   shopify_products_fp = f"{output_dir}/{run_num}_{job_id}_1_shopify_products.jsonl"
   generic_products_fp = f"{output_dir}/{run_num}_{job_id}_2_generic_products.jsonl"
@@ -79,13 +117,40 @@ def main(shopify_url="",
   else:
     brProducts(generic_products_fp, br_products_fp, shopify_url)
 
-  brPatch(br_products_fp, br_patch_fp)
-  patch_catalog(br_patch_fp,
-                account_id=br_account_id,
-                environment_name=br_environment,
-                catalog_name=br_catalog_name,
-                token=br_api_token)
+  # Use PATCH for delta mode, PUT for full mode
+  if delta_mode:
+    # Import patch_catalog_delta if we need different behavior
+    # For now, patch_catalog should work for both
+    pass
 
+  brPatch(br_products_fp, br_patch_fp)
+
+  if delta_mode:
+    logging.info("Using PATCH for delta feed")
+    patch_catalog_delta(br_patch_fp,
+                        account_id=br_account_id,
+                        environment_name=br_environment,
+                        catalog_name=br_catalog_name,
+                        token=br_api_token)
+  else:
+    logging.info("Using PUT for full feed")
+    patch_catalog(br_patch_fp,
+                  account_id=br_account_id,
+                  environment_name=br_environment,
+                  catalog_name=br_catalog_name,
+                  token=br_api_token)
+
+  # Add auto-indexing after successful feed upload
+  if auto_index:
+      logging.info("Auto-index enabled, triggering index job...")
+      run_index(
+          account_id=br_account_id,
+          environment_name=br_environment,
+          catalog_name=br_catalog_name,
+          token=br_api_token
+      )
+
+# Update the validate_required_vars function:
 def validate_required_vars():
   required_vars = {
     'SHOPIFY_URL': 'Shopify URL is required',
@@ -214,6 +279,27 @@ if __name__ == '__main__':
     default=getenv("SHOPIFY_LANGUAGE")
   )
 
+  parser.add_argument(
+    "--auto-index",
+    help="Automatically trigger index job after successful feed upload",
+    action="store_true",
+    default=False
+  )
+
+  parser.add_argument(
+    "--delta-mode",
+    help="Run in delta mode for incremental updates",
+    action="store_true",
+    default=False
+  )
+
+  parser.add_argument(
+    "--start-date",
+    help="Start date for delta mode (ISO format)",
+    type=str,
+    default=None
+  )
+
   args = parser.parse_args()
   shopify_url = args.shopify_url
   shopify_pat = args.shopify_pat
@@ -223,6 +309,9 @@ if __name__ == '__main__':
   api_token = args.br_api_token
   output_dir = args.output_dir
   multi_market = args.multi_market  # New argument
+  delta_mode = getenv("DELTA_MODE", "false").lower() == "true" or args.delta_mode
+  start_date = getenv("START_DATE") or args.start_date
+  auto_index = getenv("AUTO_INDEX", "false").lower() == "true" or args.auto_index
 
   if args.multi_market:
     if not args.shopify_market:
@@ -239,4 +328,7 @@ if __name__ == '__main__':
        output_dir=output_dir,
        multi_market=multi_market,
        shopify_market=args.shopify_market,
-       shopify_language=args.shopify_language)
+       shopify_language=args.shopify_language,
+       auto_index=auto_index,
+       delta_mode=delta_mode,
+       start_date=start_date)

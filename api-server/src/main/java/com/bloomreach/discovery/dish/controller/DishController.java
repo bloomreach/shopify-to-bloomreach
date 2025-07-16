@@ -1,10 +1,8 @@
 package com.bloomreach.discovery.dish.controller;
 
-import com.bloomreach.discovery.dish.dto.DishConfigDTO;
-import com.bloomreach.discovery.dish.dto.ErrorResponse;
-import com.bloomreach.discovery.dish.dto.JobDTO;
-import com.bloomreach.discovery.dish.dto.JobStatus;
+import com.bloomreach.discovery.dish.dto.*;
 import com.bloomreach.discovery.dish.exception.DockerServiceException;
+import com.bloomreach.discovery.dish.service.DeltaTaskManager;
 import com.bloomreach.discovery.dish.service.DockerService;
 import com.github.dockerjava.api.exception.NotFoundException;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -22,6 +20,7 @@ import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/dish")
@@ -31,8 +30,12 @@ public class DishController {
 
     private final DockerService dockerService;
 
-    public DishController(DockerService dockerService) {
+    private final DeltaTaskManager deltaTaskManager;
+
+    // Update constructor to include DeltaTaskManager
+    public DishController(DockerService dockerService, DeltaTaskManager deltaTaskManager) {
         this.dockerService = dockerService;
+        this.deltaTaskManager = deltaTaskManager;
     }
 
     @Operation(
@@ -101,6 +104,42 @@ public class DishController {
             log.error("Error retrieving statuses for jobs", e);
             throw new DockerServiceException("Failed to retrieve job statuses", e);
         }
+    }
+
+
+    @Operation(
+            summary = "Schedule a delta job",
+            description = "Schedules a recurring delta job that runs at specified intervals"
+    )
+    @ApiResponse(responseCode = "201", description = "Delta job scheduled successfully")
+    @ApiResponse(responseCode = "400", description = "Invalid input parameters")
+    @ApiResponse(responseCode = "500", description = "Internal server error")
+    @PostMapping("/scheduleDeltaJob")
+    public ResponseEntity<Map<String, String>> scheduleDeltaJob(@Valid @RequestBody DeltaScheduleDTO deltaConfig) {
+        String taskId = deltaTaskManager.scheduleDeltaJob(deltaConfig);
+        Map<String, String> response = Map.of("taskId", taskId);
+        return new ResponseEntity<>(response, HttpStatus.CREATED);
+    }
+
+    @Operation(
+            summary = "Get active delta tasks",
+            description = "Retrieves all currently scheduled delta tasks"
+    )
+    @GetMapping("/deltaTasks")
+    public ResponseEntity<List<DeltaTaskInfo>> getDeltaTasks() {
+        List<DeltaTaskInfo> tasks = deltaTaskManager.getActiveTasks();
+        return ResponseEntity.ok(tasks);
+    }
+
+    @Operation(
+            summary = "Cancel a delta task",
+            description = "Cancels a scheduled delta task by task ID"
+    )
+    @DeleteMapping("/deltaTasks/{taskId}")
+    public ResponseEntity<Map<String, Boolean>> cancelDeltaTask(@PathVariable String taskId) {
+        boolean cancelled = deltaTaskManager.cancelDeltaJob(taskId);
+        Map<String, Boolean> response = Map.of("cancelled", cancelled);
+        return ResponseEntity.ok(response);
     }
 
 }
