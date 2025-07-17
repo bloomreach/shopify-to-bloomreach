@@ -18,5 +18,7 @@ public class DockerProperties {
     private int logTimeout = 3000;
     private String hostPath;
     private int containerRetentionDays = 20; // Default to 20 days retention
+    private boolean marketCacheEnabled = true;
+    private int marketCacheMaxAgeHours = 24;
 
 }

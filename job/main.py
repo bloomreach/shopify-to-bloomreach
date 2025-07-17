@@ -34,7 +34,9 @@ def main(shopify_url="",
          shopify_language=None,
          auto_index=False,
          delta_mode=False,
-         start_date=None):
+         start_date=None,
+         market_cache_enabled=False,
+         market_cache_max_age_hours=24):
 
   run_num = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
   api_version = '2025-04'
@@ -80,7 +82,9 @@ def main(shopify_url="",
       run_num=run_num, multiMarket=True,
       shopify_market=shopify_market,
       shopify_language=shopify_language,
-      start_date=start_date if delta_mode else None
+      start_date=start_date if delta_mode else None,
+      market_cache_enabled=market_cache_enabled,
+      market_cache_max_age_hours=market_cache_max_age_hours
     )
   else:
     shopify_jsonl_fp, job_id = get_shopify_jsonl_fp(
@@ -300,6 +304,20 @@ if __name__ == '__main__':
     default=None
   )
 
+  parser.add_argument(
+    "--market-cache-enabled",
+    help="Enable market data caching for delta feeds",
+    action="store_true",
+    default=False
+  )
+
+  parser.add_argument(
+    "--market-cache-max-age-hours",
+    help="Maximum age of market data cache in hours",
+    type=int,
+    default=24
+  )
+
   args = parser.parse_args()
   shopify_url = args.shopify_url
   shopify_pat = args.shopify_pat
@@ -312,6 +330,8 @@ if __name__ == '__main__':
   delta_mode = getenv("DELTA_MODE", "false").lower() == "true" or args.delta_mode
   start_date = getenv("START_DATE") or args.start_date
   auto_index = getenv("AUTO_INDEX", "false").lower() == "true" or args.auto_index
+  market_cache_enabled = getenv("MARKET_CACHE_ENABLED", "false").lower() == "true" or args.market_cache_enabled
+  market_cache_max_age_hours = int(getenv("MARKET_CACHE_MAX_AGE_HOURS", "24")) or args.market_cache_max_age_hours
 
   if args.multi_market:
     if not args.shopify_market:
@@ -331,4 +351,6 @@ if __name__ == '__main__':
        shopify_language=args.shopify_language,
        auto_index=auto_index,
        delta_mode=delta_mode,
-       start_date=start_date)
+       start_date=start_date,
+       market_cache_enabled=market_cache_enabled,
+       market_cache_max_age_hours=market_cache_max_age_hours)

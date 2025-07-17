@@ -1,6 +1,6 @@
-# DiSh (Docker-based Shopify Ingestion)
+# DiSh API Server (Docker-based Shopify Ingestion)
 
-DiSh is a Spring Boot application that manages Docker-based Shopify data ingestion jobs for Bloomreach Discovery.
+DiSh is a Spring Boot application that manages Docker-based Shopify data ingestion jobs for Bloomreach Discovery. It provides both one-time job execution and scheduled delta feed capabilities.
 
 ## Overview
 
@@ -8,16 +8,15 @@ DiSh provides a REST API for starting and monitoring Shopify data ingestion jobs
 
 ## Features
 
-- Create and monitor Docker containers for Shopify data ingestion
-- **Delta sync support** for incremental data updates based on timestamps
-- RESTful API with OpenAPI documentation
-- Token-based authentication
-- Configurable Docker settings
-- Job status monitoring with optional log retrieval
-- Support for multi-market Shopify configurations
-- Batch job status retrieval with fault tolerance
-- Optimized container lookup for performance
-- Automatic cleanup of old containers via scheduled jobs
+- **One-time Jobs**: Create and monitor Docker containers for Shopify data ingestion
+- **Delta Feed Scheduling**: Schedule recurring delta feeds with configurable intervals
+- **Job Monitoring**: RESTful API with comprehensive job status tracking
+- **Security**: Token-based authentication with configurable access control
+- **Auto-indexing**: Optional automatic Bloomreach index triggering after successful feeds
+- **Multi-market Support**: Handle Shopify stores with multiple markets and translations
+- **Batch Operations**: Bulk job status retrieval with fault tolerance
+- **Resource Management**: Automatic cleanup of old containers via scheduled jobs
+- **Performance Optimization**: Optimized container lookup and caching strategies
 
 ## Requirements
 
@@ -52,6 +51,15 @@ dish:
     enabled: true
     access:
       token: your-secret-token-here
+```
+
+### Delta Feed Configuration
+
+```yaml
+dish:
+  delta:
+    tracker:
+      file: ./delta-job-tracker.json  # File-based state tracking
   container:
     cleanup:
       cron: "0 0 2 * * ?"  # Run cleanup at 2 AM daily
@@ -59,7 +67,9 @@ dish:
 
 ## API Endpoints
 
-### Create Job
+### One-Time Job Management
+
+#### Create Job
 
 Creates a new Docker container to ingest Shopify data.
 
@@ -76,7 +86,8 @@ Request body:
   "brAccountId": "your-br-account-id",
   "brCatalogName": "your-br-catalog-name",
   "brApiToken": "your-br-api-token",
-  "brMultiMarket": false
+  "brMultiMarket": false,
+  "autoIndex": false
 }
 ```
 
@@ -91,40 +102,12 @@ For multi-market configurations:
   "brApiToken": "your-br-api-token",
   "brMultiMarket": true,
   "shopifyMarket": "US",
-  "shopifyLanguage": "en-US"
+  "shopifyLanguage": "en-US",
+  "autoIndex": true
 }
 ```
 
-### Create Delta Job
-
-Creates a new Docker container to perform incremental data sync based on a start timestamp.
-
-```
-POST /dish/createDeltaJob
-```
-
-Request body:
-```json
-{
-  "shopifyUrl": "your-store.myshopify.com",
-  "shopifyPat": "your-shopify-personal-access-token",
-  "brEnvironmentName": "production",
-  "brAccountId": "your-br-account-id",
-  "brCatalogName": "your-br-catalog-name",
-  "brApiToken": "your-br-api-token",
-  "brMultiMarket": false,
-  "startDate": "2025-07-16T09:50:00Z"
-}
-```
-
-**Delta Job Features:**
-- Processes only products updated after the specified `startDate`
-- Uses ISO 8601 timestamp format (UTC recommended)
-- Automatically sets `DELTA_MODE=true` environment variable
-- Optimized for incremental updates and reduced processing time
-- Supports timezone-aware timestamps (e.g., `2025-07-16T09:50:00+02:00`)
-
-### Check Job Status
+#### Check Job Status
 
 Retrieves the current status of a job.
 
@@ -137,7 +120,7 @@ Parameters:
 - `deleteOnSuccess`: Whether to delete the container if the job completed successfully (default: false)
 - `verbose`: Whether to include detailed logs in the response (default: false)
 
-### Check Multiple Job Statuses
+#### Check Multiple Job Statuses
 
 Retrieves the statuses of multiple jobs in a single request.
 
@@ -149,45 +132,108 @@ Parameters:
 - `jobNames`: Comma-separated list of job names to check (required)
 - `verboseOnFailure`: Whether to include detailed logs for failed jobs (default: false)
 
-#### Key Features of Batch Job Status:
-- Fault-tolerant: continues processing even if individual jobs fail
-- Optimized container lookup for better performance
-- Detailed failure reporting for troubleshooting
+### Delta Feed Scheduling
 
-## Delta Sync Implementation
+#### Schedule Delta Job
 
-The delta sync functionality allows for efficient incremental updates by processing only products that have been modified since a specific timestamp.
+Creates a recurring delta feed job that runs at specified intervals.
 
-### How Delta Sync Works
+```
+POST /dish/scheduleDeltaJob
+```
 
-1. **Timestamp Filtering**: Uses Shopify GraphQL query with `updated_at` filter:
-   ```graphql
-   products (query: "updated_at:>'2025-07-16T09:50:00Z'") {
-     edges {
-       node {
-         id
-         handle
-         title
-         updatedAt
-       }
-     }
-   }
-   ```
+Request body:
+```json
+{
+  "shopifyUrl": "your-store.myshopify.com",
+  "shopifyPat": "your-shopify-personal-access-token",
+  "brEnvironmentName": "production",
+  "brAccountId": "your-br-account-id",
+  "brCatalogName": "your-br-catalog-name",
+  "brApiToken": "your-br-api-token",
+  "brMultiMarket": false,
+  "autoIndex": true,
+  "deltaInterval": "EVERY_15_MINUTES"
+}
+```
 
-2. **Environment Variables**: The system automatically sets:
-   - `DELTA_MODE=true`
-   - `START_DATE=2025-07-16T09:50:00Z` (ISO 8601 format, truncated to seconds)
+**Available Delta Intervals:**
+- `EVERY_5_MINUTES`
+- `EVERY_15_MINUTES`
+- `EVERY_30_MINUTES`
+- `EVERY_HOUR`
+- `EVERY_2_HOURS`
+- `EVERY_6_HOURS`
+- `EVERY_12_HOURS`
 
-3. **Timezone Support**: Accepts timestamps with timezone offsets:
-   - UTC: `2025-07-16T09:50:00Z`
-   - With timezone: `2025-07-16T09:50:00+02:00`
+#### List Active Delta Tasks
 
-### Best Practices for Delta Sync
+Retrieves all currently scheduled delta tasks.
 
-- Use UTC timestamps when possible for consistency
-- Store the last successful sync timestamp to use for the next delta job
-- Consider running delta jobs frequently (hourly/daily) to keep data fresh
-- Use full sync jobs periodically to ensure data integrity
+```
+GET /dish/deltaTasks
+```
+
+Response:
+```json
+[
+  {
+    "taskId": "ec186197-e5a3-409a-80a8-4da6b342f6a9",
+    "catalogKey": "store.myshopify.com-catalog-1234-production",
+    "interval": "EVERY_15_MINUTES",
+    "createdAt": "2025-07-16T14:27:59.516",
+    "lastRun": null,
+    "isRunning": false
+  }
+]
+```
+
+#### Cancel Delta Task
+
+Cancels a scheduled delta task.
+
+```
+DELETE /dish/deltaTasks/{taskId}
+```
+
+Response:
+```json
+{
+  "cancelled": true
+}
+```
+
+## Delta Feed Architecture
+
+### How Delta Feeds Work
+
+1. **Scheduling**: Uses Spring's `TaskScheduler` with dynamic cron expressions
+2. **State Tracking**: File-based tracking (`delta-job-tracker.json`) stores last successful run timestamps
+3. **Date Calculation**: Automatically calculates start dates with 30-second overlap for safety
+4. **Conflict Resolution**: Skips execution if previous delta job for the same catalog is still running
+5. **GraphQL Optimization**: Uses Shopify's `updated_at:>` query to fetch only changed products
+6. **API Efficiency**: Uses HTTP PATCH instead of PUT for incremental updates
+
+### Delta Feed Benefits
+
+- **Performance**: 10-100x faster than full feeds for incremental updates
+- **Resource Efficiency**: Significantly less memory and CPU usage
+- **API Optimization**: Reduces load on both Shopify and Bloomreach APIs
+- **Near Real-time**: Enables frequent catalog synchronization
+
+### State Management
+
+Delta feeds maintain state using a JSON file that tracks:
+```json
+{
+  "catalog-key": {
+    "lastSuccessfulRun": "2025-07-16T12:24:00.022379Z",
+    "isRunning": false
+  }
+}
+```
+
+**Note**: Scheduled tasks are lost on application restart (by design for simplicity).
 
 ## Security
 
@@ -199,26 +245,27 @@ x-dish-access-token: your-token-here
 
 Security can be disabled for development environments by setting `dish.security.enabled=false`.
 
-## Docker Container
+## Docker Container Environment
 
 Each job runs in a Docker container with the following environment variables:
 
-Required for all jobs:
+### Required for all jobs:
 - `SHOPIFY_URL`
 - `SHOPIFY_PAT`
 - `BR_ENVIRONMENT_NAME`
 - `BR_ACCOUNT_ID`
 - `BR_CATALOG_NAME`
 - `BR_API_TOKEN`
-- `BR_MULTI_MARKET`
 
-Required for multi-market jobs:
+### Optional:
+- `BR_MULTI_MARKET` (true/false)
+- `AUTO_INDEX` (true/false)
+- `DELTA_MODE` (true/false)
+- `START_DATE` (ISO format with timezone)
+
+### Required for multi-market jobs:
 - `SHOPIFY_MARKET`
 - `SHOPIFY_LANGUAGE`
-
-**Delta-specific environment variables:**
-- `DELTA_MODE`: Set to `true` for delta sync jobs
-- `START_DATE`: ISO 8601 timestamp indicating the start of the sync window
 
 ## Job Statuses
 
@@ -259,6 +306,16 @@ mvn clean package
 mvn test
 ```
 
+### Running Locally
+
+```bash
+# With security enabled
+mvn spring-boot:run -Dspring-boot.run.arguments="--dish.security.access.token=your-token"
+
+# With security disabled
+mvn spring-boot:run -Dspring-boot.run.arguments="--dish.security.enabled=false"
+```
+
 ## Performance Considerations
 
 - **Container Lookup**: The application uses an optimized approach to look up containers by job name
@@ -266,15 +323,34 @@ mvn test
 - **Error Handling**: The system handles individual job failures gracefully without impacting other jobs
 - **Connection Pooling**: Configure the `maxConnections` property based on your environment's needs
 - **Resource Management**: Scheduled cleanup of old containers prevents resource leaks and improves system stability
-- **Delta Sync Performance**: Use delta jobs for faster processing when only recent changes are needed
+- **Delta Feed Efficiency**: Market data caching reduces redundant API calls for multi-market delta feeds
+
+## Container Cleanup
+
+Automatic cleanup of old containers is performed daily:
+
+```yaml
+dish:
+  container:
+    cleanup:
+      cron: "0 0 2 * * ?"  # Daily at 2 AM
+docker:
+  containerRetentionDays: 7  # Keep containers for 7 days
+```
+
+The cleanup process:
+- Only removes containers with names starting with `dish-`
+- Preserves the main application container
+- Configurable retention period
+- Handles cleanup failures gracefully
 
 ## API Documentation
 
 When the application is running, API documentation is available at:
-- Swagger UI: `/swagger-ui/`
-- OpenAPI JSON: `/v3/api-docs`
+- **Swagger UI**: `/swagger-ui/`
+- **OpenAPI JSON**: `/v3/api-docs`
 
-## Docker
+## Docker Deployment
 
 ### Build the image
 ```bash
@@ -283,7 +359,97 @@ docker build -t dish-app .
 
 ### Run the container with Docker socket mounted
 ```bash
-docker run -d -p 8080:8080 -v /var/run/docker.sock:/var/run/docker.sock dish-app
+docker run -d -p 8080:8080 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e DISH_SECURITY_ACCESS_TOKEN=your-secret-token \
+  -e DOCKER_HOST_PATH=/path/to/host/export \
+  dish-app
+```
+
+### Docker Compose
+
+```yaml
+version: '3.8'
+services:
+  dish-api:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./export:/export
+    environment:
+      - DISH_SECURITY_ACCESS_TOKEN=your-secret-token
+      - DOCKER_HOST_PATH=/path/to/host/export
+      - DOCKER_CONTAINER_RETENTION_DAYS=7
+```
+
+## Monitoring and Health Checks
+
+The application provides health check endpoints:
+
+```
+GET /actuator/health
+```
+
+Monitor delta feed execution through:
+- Application logs for detailed execution information
+- Job status endpoints for real-time status
+- Delta task endpoints for scheduling information
+
+## Example Usage Scenarios
+
+### Scenario 1: One-time Full Feed
+```bash
+curl -X POST http://localhost:8080/dish/createJob \
+  -H "Content-Type: application/json" \
+  -H "x-dish-access-token: your-token" \
+  -d '{
+    "shopifyUrl": "store.myshopify.com",
+    "shopifyPat": "shpat_...",
+    "brEnvironmentName": "production",
+    "brAccountId": "1234",
+    "brCatalogName": "my-catalog",
+    "brApiToken": "br_token",
+    "autoIndex": true
+  }'
+```
+
+### Scenario 2: Schedule Frequent Delta Updates
+```bash
+curl -X POST http://localhost:8080/dish/scheduleDeltaJob \
+  -H "Content-Type: application/json" \
+  -H "x-dish-access-token: your-token" \
+  -d '{
+    "shopifyUrl": "store.myshopify.com",
+    "shopifyPat": "shpat_...",
+    "brEnvironmentName": "production",
+    "brAccountId": "1234",
+    "brCatalogName": "my-catalog",
+    "brApiToken": "br_token",
+    "autoIndex": true,
+    "deltaInterval": "EVERY_5_MINUTES"
+  }'
+```
+
+### Scenario 3: Multi-market with Delta Feeds
+```bash
+curl -X POST http://localhost:8080/dish/scheduleDeltaJob \
+  -H "Content-Type: application/json" \
+  -H "x-dish-access-token: your-token" \
+  -d '{
+    "shopifyUrl": "store.myshopify.com",
+    "shopifyPat": "shpat_...",
+    "brEnvironmentName": "production",
+    "brAccountId": "1234",
+    "brCatalogName": "my-catalog",
+    "brApiToken": "br_token",
+    "brMultiMarket": true,
+    "shopifyMarket": "US",
+    "shopifyLanguage": "en",
+    "autoIndex": true,
+    "deltaInterval": "EVERY_15_MINUTES"
+  }'
 ```
 
 ## License

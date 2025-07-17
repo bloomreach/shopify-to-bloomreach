@@ -151,8 +151,8 @@ public class DockerService {
         String formattedStartDate = DateTimeFormatter.ISO_INSTANT.format(startDate.truncatedTo(java.time.temporal.ChronoUnit.SECONDS));
         env.add("DELTA_MODE=true");
         env.add("START_DATE=" + formattedStartDate);
-
-        log.info("Delta job start date formatted as: {}", formattedStartDate);
+        env.add("MARKET_CACHE_ENABLED=" + properties.isMarketCacheEnabled());
+        env.add("MARKET_CACHE_MAX_AGE_HOURS=" + properties.getMarketCacheMaxAgeHours());
 
         return env;
     }

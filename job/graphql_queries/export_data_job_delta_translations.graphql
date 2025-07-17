@@ -1,0 +1,124 @@
+mutation ExportDataJob {
+    bulkOperationRunQuery(
+        query: """
+        {
+            products (query: "updated_at:>'{start_date}'") {
+                pageInfo {
+                    hasNextPage
+                }
+                edges {
+                    cursor
+                    node {
+                        id
+                        handle
+                        title
+                        translations(locale: "{language}") {
+                            key
+                            value
+                            locale
+                        }
+                        createdAt
+                        updatedAt
+                        descriptionHtml
+                        totalInventory
+                        onlineStorePreviewUrl
+                        priceRangeV2 {
+                            maxVariantPrice {
+                                amount
+                            }
+                            minVariantPrice {
+                                amount
+                            }
+                        }
+                        featuredImage {
+                            url
+                        }
+                        productType
+                        seo {
+                            description
+                            title
+                        }
+                        status
+                        storefrontId
+                        tags
+                        vendor
+                        collections(query: "published_status:published") {
+                            edges {
+                                cursor
+                                node {
+                                    id
+                                    handle
+                                    title
+                                    translations(locale: "{language}"){
+                                        key
+                                        value
+                                        locale
+                                    }
+                                    productsCount {
+                                        count
+                                    }
+                                }
+                            }
+                        }
+                        metafields {
+                            edges {
+                                cursor
+                                node {
+                                    id
+                                    key
+                                    value
+                                    namespace
+                                    type
+                                    updatedAt
+                                }
+                            }
+                        }
+                        variants {
+                            edges {
+                                cursor
+                                node {
+                                    id
+                                    title
+                                    sku
+                                    price
+                                    metafields {
+                                        edges {
+                                            node {
+                                                id
+                                                key
+                                                value
+                                                namespace
+                                                type
+                                                updatedAt
+                                            }
+                                        }
+                                    }
+                                    image {
+                                        url
+                                    }
+                                    selectedOptions {
+                                        name
+                                        value
+                                    }
+                                    compareAtPrice
+                                    inventoryQuantity
+                                    availableForSale
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        """
+    ) {
+        bulkOperation {
+            id
+            status
+        }
+        userErrors {
+            field
+            message
+        }
+    }
+}

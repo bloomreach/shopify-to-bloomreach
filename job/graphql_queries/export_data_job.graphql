@@ -13,6 +13,7 @@ mutation ExportDataJob {
               handle
               title
               createdAt
+              updatedAt
               descriptionHtml
               totalInventory
               onlineStorePreviewUrl

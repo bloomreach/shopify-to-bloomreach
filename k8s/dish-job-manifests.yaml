@@ -1,0 +1,260 @@
+# DiSh Job Kubernetes Deployment
+# Single file containing all necessary resources
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dish-system
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dish-secrets
+  namespace: dish-system
+type: Opaque
+stringData:
+  # Replace with your actual tokens
+  shopify-pat: "your-shopify-pat-token-here"
+  bloomreach-token: "your-bloomreach-api-token-here"
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dish-config
+  namespace: dish-system
+data:
+  # Store configuration
+  shopify-url: "your-store.myshopify.com"
+  br-environment: "production"  # or "staging"
+  br-account-id: "1234"
+  br-catalog-name: "your-catalog"
+
+  # Optional settings
+  log-level: "INFO"
+  auto-index: "true"
+  multi-market: "false"
+  market-cache-enabled: "true"
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: dish-storage
+  namespace: dish-system
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+
+---
+# Full Feed Job Template (run manually)
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: dish-full-feed
+  namespace: dish-system
+  labels:
+    app: dish-job
+    type: full-feed
+spec:
+  ttlSecondsAfterFinished: 86400  # Auto-delete after 24 hours
+  backoffLimit: 2
+  activeDeadlineSeconds: 7200  # 2 hour timeout
+  template:
+    metadata:
+      labels:
+        app: dish-job
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: dish-job
+          image: dish-job:latest
+          imagePullPolicy: IfNotPresent
+
+          # Resource limits
+          resources:
+            requests:
+              memory: "2Gi"
+              cpu: "500m"
+            limits:
+              memory: "4Gi"
+              cpu: "1000m"
+
+          # Environment variables from ConfigMap
+          env:
+            - name: SHOPIFY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: dish-config
+                  key: shopify-url
+            - name: BR_ENVIRONMENT_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: dish-config
+                  key: br-environment
+            - name: BR_ACCOUNT_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: dish-config
+                  key: br-account-id
+            - name: BR_CATALOG_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: dish-config
+                  key: br-catalog-name
+            - name: LOGLEVEL
+              valueFrom:
+                configMapKeyRef:
+                  name: dish-config
+                  key: log-level
+            - name: AUTO_INDEX
+              valueFrom:
+                configMapKeyRef:
+                  name: dish-config
+                  key: auto-index
+            - name: BR_MULTI_MARKET
+              valueFrom:
+                configMapKeyRef:
+                  name: dish-config
+                  key: multi-market
+
+            # Environment variables from Secret
+            - name: SHOPIFY_PAT
+              valueFrom:
+                secretKeyRef:
+                  name: dish-secrets
+                  key: shopify-pat
+            - name: BR_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: dish-secrets
+                  key: bloomreach-token
+
+            # Fixed environment variables
+            - name: BR_OUTPUT_DIR
+              value: "/export"
+            - name: DELTA_MODE
+              value: "false"
+
+          # Storage mount
+          volumeMounts:
+            - name: export-volume
+              mountPath: /export
+
+      volumes:
+        - name: export-volume
+          persistentVolumeClaim:
+            claimName: dish-storage
+
+---
+# Delta Feed CronJob (runs automatically every 15 minutes)
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: dish-delta-feed
+  namespace: dish-system
+  labels:
+    app: dish-job
+    type: delta-feed
+spec:
+  schedule: "*/15 * * * *"  # Every 15 minutes
+  concurrencyPolicy: Forbid  # Don't run overlapping jobs
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+
+  jobTemplate:
+    spec:
+      ttlSecondsAfterFinished: 3600  # Auto-delete after 1 hour
+      backoffLimit: 1
+      activeDeadlineSeconds: 3600  # 1 hour timeout
+
+      template:
+        metadata:
+          labels:
+            app: dish-job
+            type: delta-feed
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: dish-job
+              image: dish-job:latest
+              imagePullPolicy: IfNotPresent
+
+              # Lower resources for delta feeds
+              resources:
+                requests:
+                  memory: "1Gi"
+                  cpu: "250m"
+                limits:
+                  memory: "2Gi"
+                  cpu: "500m"
+
+              # Same environment as full feed, but with delta mode enabled
+              env:
+                - name: SHOPIFY_URL
+                  valueFrom:
+                    configMapKeyRef:
+                      name: dish-config
+                      key: shopify-url
+                - name: BR_ENVIRONMENT_NAME
+                  valueFrom:
+                    configMapKeyRef:
+                      name: dish-config
+                      key: br-environment
+                - name: BR_ACCOUNT_ID
+                  valueFrom:
+                    configMapKeyRef:
+                      name: dish-config
+                      key: br-account-id
+                - name: BR_CATALOG_NAME
+                  valueFrom:
+                    configMapKeyRef:
+                      name: dish-config
+                      key: br-catalog-name
+                - name: LOGLEVEL
+                  valueFrom:
+                    configMapKeyRef:
+                      name: dish-config
+                      key: log-level
+                - name: AUTO_INDEX
+                  valueFrom:
+                    configMapKeyRef:
+                      name: dish-config
+                      key: auto-index
+                - name: MARKET_CACHE_ENABLED
+                  valueFrom:
+                    configMapKeyRef:
+                      name: dish-config
+                      key: market-cache-enabled
+                - name: SHOPIFY_PAT
+                  valueFrom:
+                    secretKeyRef:
+                      name: dish-secrets
+                      key: shopify-pat
+                - name: BR_API_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: dish-secrets
+                      key: bloomreach-token
+
+                # Delta-specific settings
+                - name: BR_OUTPUT_DIR
+                  value: "/export"
+                - name: DELTA_MODE
+                  value: "true"
+                - name: START_DATE
+                  value: "$(date -u -d '15 minutes ago' +%Y-%m-%dT%H:%M:%S+00:00)"
+
+              volumeMounts:
+                - name: export-volume
+                  mountPath: /export
+
+          volumes:
+            - name: export-volume
+              persistentVolumeClaim:
+                claimName: dish-storage

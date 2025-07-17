@@ -9,16 +9,18 @@ This project enables automated synchronization of Shopify product data into a Bl
 * **`job/`** – Contains the Docker-based ingestion logic (Python-based). This folder is responsible for:
 
     * Extracting product data from Shopify via GraphQL bulk operations.
-    * Transforming it into Bloomreach-compatible format.
+    * Supporting both full feeds and delta feeds (incremental updates).
+    * Transforming data into Bloomreach-compatible format.
     * Uploading the final dataset via Bloomreach's Feed API.
-    * **Supporting delta sync mode** for incremental updates based on timestamps.
+    * Multi-market support with translations and market-specific URLs.
 
 * **`api-server/`** – Contains a Spring Boot REST API (Java-based) that:
 
-    * Triggers Docker jobs on demand.
+    * Triggers Docker jobs on demand (full feeds).
+    * Schedules and manages recurring delta feed jobs.
     * Monitors job execution status.
     * Manages security and cleanup via configurable cron jobs.
-    * **Provides delta sync job creation** with automatic timestamp handling.
+    * Provides automatic indexing capabilities.
 
 These components are **loosely coupled** and can be run independently.
 
@@ -28,10 +30,10 @@ These components are **loosely coupled** and can be run independently.
 
 * **Languages:** Python (ETL job), Java (Spring Boot API server)
 * **Containerization:** Docker
-* **APIs:** Shopify GraphQL, Bloomreach Feed API
+* **APIs:** Shopify GraphQL, Bloomreach Feed API, Bloomreach Index API
 * **Job Triggering:** REST API with token-based security
+* **Scheduling:** Spring Boot dynamic scheduling with cron expressions
 * **Logging:** Configurable with environment variables
-* **Data Sync:** Full and delta (incremental) synchronization modes
 
 ---
 
@@ -39,10 +41,10 @@ These components are **loosely coupled** and can be run independently.
 
 This container automates:
 
-1. Extraction of product and market data from Shopify.
+1. Extraction of product and market data from Shopify (full or delta).
 2. Transformation into a format compliant with Bloomreach Discovery.
-3. Uploading to Bloomreach via the Feed API.
-4. **Delta sync support** for processing only recently updated products.
+3. Uploading to Bloomreach via the Feed API (PUT for full feeds, PATCH for delta feeds).
+4. Optional automatic indexing after successful data upload.
 
 ### Required Environment Variables
 
@@ -55,17 +57,39 @@ This container automates:
 | `BR_CATALOG_NAME`     | Bloomreach catalog name                            | Yes         |
 | `BR_API_TOKEN`        | Bloomreach Feed API token                          | Yes         |
 | `BR_OUTPUT_DIR`       | Output directory (default: `/export`)              | Yes         |
-| `BR_MULTI_MARKET`     | (Optional) `true` to enable multi-market           | No          |
-| `SHOPIFY_MARKET`      | (Required if `BR_MULTI_MARKET=true`)               | Conditional |
-| `SHOPIFY_LANGUAGE`    | (Required if `BR_MULTI_MARKET=true`)               | Conditional |
-| `DELTA_MODE`          | (Optional) `true` to enable delta sync             | No          |
-| `START_DATE`          | (Required if `DELTA_MODE=true`) ISO 8601 timestamp | Conditional |
+| `BR_MULTI_MARKET`     | `true` to enable multi-market support              | No          |
+| `SHOPIFY_MARKET`      | Market code (required if `BR_MULTI_MARKET=true`)   | Conditional |
+| `SHOPIFY_LANGUAGE`    | Language code (required if `BR_MULTI_MARKET=true`) | Conditional |
+| `AUTO_INDEX`          | `true` to auto-trigger indexing after feed         | No          |
+| `DELTA_MODE`          | `true` for incremental updates                     | No          |
+| `START_DATE`          | Start date for delta feeds (ISO format)            | No          |
+
+### Feed Types
+
+#### Full Feed (Default)
+- Replaces entire product catalog
+- Uses HTTP PUT to Bloomreach
+- Processes all products in the store
+
+#### Delta Feed
+- Only processes products updated since last run
+- Uses HTTP PATCH to Bloomreach
+- Much faster for frequent updates
+- Automatically calculates date ranges with 30-second overlap
+
+### Multi-Market Support
+
+For stores with multiple markets and translations:
+- Fetches market-specific product URLs
+- Includes translated product titles and descriptions
+- Supports market data caching for efficient delta feeds
 
 ---
 
-### Example Run - Full Sync
+### Example Run
 
 ```bash
+# Full feed
 docker build -t dish-job ./job
 docker run --rm -v $(pwd)/export:/export \
   -e SHOPIFY_URL=shop.myshopify.com \
@@ -75,12 +99,10 @@ docker run --rm -v $(pwd)/export:/export \
   -e BR_CATALOG_NAME=my-catalog \
   -e BR_API_TOKEN=br_token \
   -e BR_OUTPUT_DIR=/export \
+  -e AUTO_INDEX=true \
   dish-job
-```
 
-### Example Run - Delta Sync
-
-```bash
+# Delta feed
 docker run --rm -v $(pwd)/export:/export \
   -e SHOPIFY_URL=shop.myshopify.com \
   -e SHOPIFY_PAT=your_token \
@@ -90,7 +112,7 @@ docker run --rm -v $(pwd)/export:/export \
   -e BR_API_TOKEN=br_token \
   -e BR_OUTPUT_DIR=/export \
   -e DELTA_MODE=true \
-  -e START_DATE=2025-07-16T09:50:00Z \
+  -e START_DATE=2025-07-16T12:00:00+00:00 \
   dish-job
 ```
 
@@ -112,56 +134,20 @@ docker run --rm \
   dish-job
 ```
 
-If using Docker Compose, add the following:
-
-```yaml
-deploy:
-  resources:
-    limits:
-      memory: 4g
-```
-
 ---
 
 ## 🧠 API Server (Java) – `api-server/`
 
-The API server provides an interface for programmatically managing ingestion jobs.
+The API server provides an interface for programmatically managing ingestion jobs and scheduling delta feeds.
 
 ### Features
 
-* Create full sync jobs via `/dish/createJob`
-* **Create delta sync jobs via `/dish/createDeltaJob`**
-* Check job status via `/dish/statusJob`
-* Batch status checks via `/dish/statusJobs`
-* Automatic cleanup of old containers
-* **Automatic ISO 8601 timestamp formatting for delta jobs**
-
-### Delta Sync API
-
-The new delta sync endpoint allows for efficient incremental updates:
-
-```bash
-POST /dish/createDeltaJob
-Content-Type: application/json
-x-dish-access-token: your-secret-token
-
-{
-  "shopifyUrl": "shop.myshopify.com",
-  "shopifyPat": "your_token",
-  "brEnvironmentName": "production",
-  "brAccountId": "1234",
-  "brCatalogName": "my-catalog",
-  "brApiToken": "br_token",
-  "brMultiMarket": false,
-  "startDate": "2025-07-16T09:50:00Z"
-}
-```
-
-**Key Delta Sync Features:**
-- Accepts ISO 8601 timestamps with timezone support
-- Automatically sets `DELTA_MODE=true` and `START_DATE` environment variables
-- Truncates timestamps to seconds precision for Shopify compatibility
-- Supports both UTC (`Z`) and timezone offset formats (`+02:00`)
+* **One-time Jobs**: Create full feed jobs via `/dish/createJob`
+* **Delta Scheduling**: Schedule recurring delta feeds via `/dish/scheduleDeltaJob`
+* **Job Monitoring**: Check job status via `/dish/statusJob` and `/dish/statusJobs`
+* **Task Management**: List and cancel scheduled delta tasks
+* **Auto-indexing**: Optional automatic index triggering after successful feeds
+* **Automatic cleanup**: Scheduled removal of old containers
 
 ### Security
 
@@ -174,6 +160,27 @@ dish:
     access:
       token: your-secret-token
 ```
+
+### API Endpoints
+
+#### Job Management
+- `POST /dish/createJob` - Create a one-time full feed job
+- `GET /dish/statusJob?jobName={name}` - Check individual job status
+- `GET /dish/statusJobs?jobNames={name1,name2}` - Check multiple job statuses
+
+#### Delta Feed Scheduling
+- `POST /dish/scheduleDeltaJob` - Schedule recurring delta feeds
+- `GET /dish/deltaTasks` - List active scheduled tasks
+- `DELETE /dish/deltaTasks/{taskId}` - Cancel a scheduled task
+
+#### Delta Feed Intervals
+- `EVERY_5_MINUTES` - Every 5 minutes
+- `EVERY_15_MINUTES` - Every 15 minutes
+- `EVERY_30_MINUTES` - Every 30 minutes
+- `EVERY_HOUR` - Every hour
+- `EVERY_2_HOURS` - Every 2 hours
+- `EVERY_6_HOURS` - Every 6 hours
+- `EVERY_12_HOURS` - Every 12 hours
 
 ### Build & Run
 
@@ -190,47 +197,28 @@ docker run -d -p 8080:8080 \
 Swagger UI will be available at:
 [http://localhost:8080/swagger-ui/](http://localhost:8080/swagger-ui/)
 
----
+### Configuration
 
-## 🔄 Delta Sync Workflow
+```yaml
+# application.yml
+docker:
+  imageTag: dish-job:latest
+  exportPath: /export
+  hostPath: /path/to/host/directory
+  containerRetentionDays: 7
 
-Delta sync enables efficient incremental updates by processing only products modified since a specific timestamp.
-
-### Recommended Delta Sync Strategy
-
-1. **Initial Full Sync**: Start with a complete data synchronization
-2. **Regular Delta Syncs**: Schedule frequent incremental updates (hourly/daily)
-3. **Periodic Full Syncs**: Run complete syncs periodically to ensure data integrity
-4. **Timestamp Management**: Store and track the last successful sync timestamp
-
-### Example Workflow
-
-```bash
-# 1. Initial full sync
-curl -X POST http://localhost:8080/dish/createJob \
-  -H "x-dish-access-token: your-token" \
-  -H "Content-Type: application/json" \
-  -d '{"shopifyUrl":"shop.myshopify.com",...}'
-
-# 2. Delta sync (1 hour later)
-curl -X POST http://localhost:8080/dish/createDeltaJob \
-  -H "x-dish-access-token: your-token" \
-  -H "Content-Type: application/json" \
-  -d '{"shopifyUrl":"shop.myshopify.com",...,"startDate":"2025-07-16T10:00:00Z"}'
-
-# 3. Next delta sync (another hour later)
-curl -X POST http://localhost:8080/dish/createDeltaJob \
-  -H "x-dish-access-token: your-token" \
-  -H "Content-Type: application/json" \
-  -d '{"shopifyUrl":"shop.myshopify.com",...,"startDate":"2025-07-16T11:00:00Z"}'
+dish:
+  security:
+    enabled: true
+    access:
+      token: your-secret-token
+  container:
+    cleanup:
+      cron: "0 0 2 * * ?"  # Daily at 2 AM
+  delta:
+    tracker:
+      file: ./delta-job-tracker.json
 ```
-
-### Delta Sync Benefits
-
-- **Faster Processing**: Only processes recently updated products
-- **Reduced Load**: Lower impact on both Shopify and Bloomreach APIs
-- **Real-time Updates**: Enables near real-time catalog synchronization
-- **Cost Efficiency**: Reduces API calls and processing time
 
 ---
 
@@ -238,52 +226,87 @@ curl -X POST http://localhost:8080/dish/createDeltaJob \
 
 All intermediate and final files are stored in `/export`:
 
-* `*_shopify_bulk_op.jsonl.gz` – Raw export from Shopify
+* `*_shopify_bulk_op.jsonl.gz` – Raw Shopify GraphQL export
+* `*_shopify_market_bulk_op.jsonl.gz` – Market data (if multi-market enabled)
 * `*_1_shopify_products.jsonl` – Aggregated product objects
 * `*_2_generic_products.jsonl` – Normalized format
 * `*_3_br_products.jsonl` – Bloomreach-ready data
-* `*_4_br_patch.jsonl` – Final patch for Feed API
-
-**Delta sync files** contain only the subset of products updated since the specified `START_DATE`, making them significantly smaller and faster to process than full sync outputs.
+* `*_4_br_patch.jsonl` – Final patch operations for Feed API
 
 ---
 
-## 🕐 Timestamp Handling
+## 🔄 Delta Feed Architecture
 
-The system handles various timestamp formats for maximum flexibility:
+### How Delta Feeds Work
 
-### Supported Formats
+1. **Scheduling**: API server schedules recurring jobs using Spring's `@Scheduled` with cron expressions
+2. **State Tracking**: File-based tracking of last successful run timestamps per catalog
+3. **Date Calculation**: Automatic calculation of start dates with 30-second overlap for safety
+4. **GraphQL Filtering**: Uses Shopify's `updated_at:>` query parameter to fetch only changed products
+5. **API Method**: Uses HTTP PATCH instead of PUT for incremental updates
+6. **Conflict Handling**: Skips execution if previous delta job is still running
 
-- **UTC**: `2025-07-16T09:50:00Z`
-- **With Timezone**: `2025-07-16T09:50:00+02:00`
-- **Short Timezone**: `2025-07-16T09:50:00+0200`
+### Delta Feed Benefits
 
-### Automatic Processing
+- **Faster Processing**: Only processes changed products
+- **Reduced Load**: Less impact on Shopify and Bloomreach APIs
+- **Frequent Updates**: Enables near real-time catalog synchronization
+- **Bandwidth Efficient**: Smaller data transfers
 
-The API server automatically:
-1. Converts timestamps to ISO 8601 format
-2. Truncates to seconds precision (removes milliseconds)
-3. Formats for optimal Shopify GraphQL compatibility
-4. Logs the formatted timestamp for debugging
+### Market Data Caching
 
-### GraphQL Query Format
+For multi-market delta feeds, market data is cached to improve efficiency:
+- Market data is cached for 24 hours by default
+- Delta feeds reuse cached market data if still fresh
+- Full feeds always refresh market data cache
 
-The delta sync uses properly quoted timestamps in Shopify GraphQL queries:
+---
 
-```graphql
-products (query: "updated_at:>'2025-07-16T09:50:00Z'") {
-  edges {
-    node {
-      id
-      handle
-      title
-      updatedAt
-    }
-  }
-}
+## 🛠 GraphQL Query Types
+
+The system automatically selects the appropriate GraphQL query based on configuration:
+
+1. **Standard**: `export_data_job.graphql` - Full feed, no translations
+2. **Translations**: `export_data_job_translations.graphql` - Full feed with translations
+3. **Delta**: `export_data_job_delta.graphql` - Delta feed, no translations  
+4. **Delta + Translations**: `export_data_job_delta_translations.graphql` - Delta feed with translations
+
+---
+
+## 📝 Example API Usage
+
+### Schedule a Delta Feed
+
+```bash
+curl -X POST http://localhost:8080/dish/scheduleDeltaJob \
+  -H "Content-Type: application/json" \
+  -H "x-dish-access-token: your-secret-token" \
+  -d '{
+    "shopifyUrl": "your-store.myshopify.com",
+    "shopifyPat": "your_pat_token",
+    "brEnvironmentName": "production",
+    "brAccountId": "1234",
+    "brCatalogName": "your-catalog",
+    "brApiToken": "your_br_token",
+    "brMultiMarket": false,
+    "autoIndex": true,
+    "deltaInterval": "EVERY_15_MINUTES"
+  }'
 ```
 
-**Important**: The single quotes around the timestamp are crucial for proper parsing by Shopify's GraphQL API.
+### Check Delta Tasks
+
+```bash
+curl -X GET http://localhost:8080/dish/deltaTasks \
+  -H "x-dish-access-token: your-secret-token"
+```
+
+### Cancel Delta Task
+
+```bash
+curl -X DELETE http://localhost:8080/dish/deltaTasks/{taskId} \
+  -H "x-dish-access-token: your-secret-token"
+```
 
 ---
 
@@ -291,71 +314,26 @@ products (query: "updated_at:>'2025-07-16T09:50:00Z'") {
 
 * The `combine.py` script is provided to concatenate source files for auditing or documentation purposes.
 * Use it to generate a readable `combined_output.txt` containing the full source.
-* **Delta sync development**: Test with recent timestamps to verify filtering works correctly
-* **Timezone testing**: Verify your local timezone handling matches expected behavior
+* Delta feed schedules are lost on application restart (designed for simplicity).
+* Container cleanup runs daily to prevent resource accumulation.
 
 ---
 
-## 🚀 Production Deployment Recommendations
-
-### For Delta Sync in Production
-
-1. **Monitoring**: Track delta sync frequency and success rates
-2. **Overlap Strategy**: Use a small time overlap (5-10 minutes) to account for timing discrepancies
-3. **Fallback**: Implement automatic fallback to full sync if delta sync fails repeatedly
-4. **Scheduling**: Consider these intervals:
-   - **High-frequency stores**: Every 15-30 minutes
-   - **Medium-frequency stores**: Every 1-2 hours  
-   - **Low-frequency stores**: Every 4-6 hours
-   - **Full sync backup**: Daily or weekly
-
-### Example Production Schedule
-
-```bash
-# Hourly delta sync (cron: 0 * * * *)
-curl -X POST http://api-server:8080/dish/createDeltaJob \
-  -H "x-dish-access-token: $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{...\"startDate\":\"$(date -d '1 hour ago' -Iseconds | sed 's/+00:00/Z/')\"}"
-
-# Daily full sync (cron: 0 2 * * *)
-curl -X POST http://api-server:8080/dish/createJob \
-  -H "x-dish-access-token: $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d "{...}"
-```
-
----
-
-## 🔧 Troubleshooting Delta Sync
+## 🔧 Troubleshooting
 
 ### Common Issues
 
-1. **GraphQL Parsing Errors**: 
-   - Ensure timestamps are properly quoted with single quotes
-   - Verify ISO 8601 format compliance
-   - Check for unsupported timezone formats
+* **Authentication Errors**: Verify your Shopify PAT and Bloomreach API token are correct and have the required scopes
+* **Processing Failures**: Check container logs for detailed error messages
+* **Feed API Errors**: Ensure your Bloomreach account ID and catalog name are accurate
+* **Empty Delta Feeds**: Normal behavior when no products have been updated since last run
+* **Memory Issues**: Increase Docker memory allocation for large catalogs
 
-2. **No Products Found**:
-   - Verify the `START_DATE` is not too recent
-   - Check that products have been actually updated since the timestamp
-   - Ensure timezone conversion is correct
+### Delta Feed Specific Issues
 
-3. **Timestamp Format Issues**:
-   - Use seconds precision (no milliseconds)
-   - Ensure proper timezone offset format (`+02:00` not `+2`)
-   - Verify UTC conversion when using local timestamps
-
-### Debug Commands
-
-```bash
-# Check job logs for timestamp formatting
-curl "http://localhost:8080/dish/statusJob?jobName=delta-job-123&verbose=true" \
-  -H "x-dish-access-token: your-token"
-
-# Test timestamp format manually
-echo "2025-07-16T09:50:00Z" | date -d @$(date -d "2025-07-16T09:50:00Z" +%s) -Iseconds
-```
+* **Duplicate Products**: Check that date formats are correct (`YYYY-MM-DDTHH:MM:SS+00:00`)
+* **Missing Updates**: Verify 30-second overlap is sufficient for your update frequency
+* **Scheduling Issues**: Confirm cron expressions are valid and timezone-aware
 
 ---
 

@@ -1,6 +1,6 @@
-# Shopify to Bloomreach Integration
+# Shopify to Bloomreach Integration Job
 
-This Docker container automates the extraction of product data from a Shopify store and imports it into a Bloomreach Discovery catalog using Bloomreach's Feed API.
+This Docker container automates the extraction of product data from a Shopify store and imports it into a Bloomreach Discovery catalog using Bloomreach's Feed API. It supports both full feeds and incremental delta feeds.
 
 ---
 
@@ -9,9 +9,11 @@ This Docker container automates the extraction of product data from a Shopify st
 This integration performs the following operations:
 
 1. Extracts product data from Shopify using the GraphQL Bulk Operations API
-2. Transforms the data through multiple stages to match Bloomreach's requirements
-3. Uploads the transformed data to your Bloomreach Discovery catalog
-4. **Supports delta sync mode** for incremental updates based on timestamps
+2. Supports both full feeds (all products) and delta feeds (only updated products)
+3. Transforms the data through multiple stages to match Bloomreach's requirements
+4. Uploads the transformed data to your Bloomreach Discovery catalog
+5. Optionally triggers automatic indexing after successful data upload
+6. Supports multi-market stores with translations and market-specific URLs
 
 ---
 
@@ -56,36 +58,29 @@ To obtain a Personal Access Token (PAT), you'll need to create and install a cus
 
 Set the following environment variables before running the container:
 
-| Variable              | Description                                                | Required    |
-| --------------------- | ---------------------------------------------------------- | ----------- |
-| `SHOPIFY_URL`         | Your Shopify store URL (e.g., `your-store.myshopify.com`)  | Yes         |
-| `SHOPIFY_PAT`         | Your Shopify Personal Access Token                         | Yes         |
-| `BR_ENVIRONMENT_NAME` | Bloomreach environment (`staging` or `production`)         | Yes         |
-| `BR_ACCOUNT_ID`       | Your 4-digit Bloomreach account ID                         | Yes         |
-| `BR_CATALOG_NAME`     | Your Bloomreach catalog name                               | Yes         |
-| `BR_API_TOKEN`        | Your Bloomreach API token                                  | Yes         |
-| `BR_OUTPUT_DIR`       | Directory for output files (default: `/export`)            | Yes         |
-| `LOGLEVEL`            | Log level (default: `INFO`)                                | No          |
-| `BR_MULTI_MARKET`     | Enable multi-market support (`true` or `false`)            | No          |
-| `SHOPIFY_MARKET`      | Shopify market code (required if `BR_MULTI_MARKET=true`)   | Conditional |
-| `SHOPIFY_LANGUAGE`    | Shopify language code (required if `BR_MULTI_MARKET=true`) | Conditional |
-| `DELTA_MODE`          | Enable delta sync mode (`true` or `false`)                 | No          |
-| `START_DATE`          | ISO 8601 timestamp for delta sync start point             | Conditional |
-
-### Delta Sync Variables
-
-When `DELTA_MODE=true`, the following additional behavior applies:
-
-- `START_DATE`: Must be provided in ISO 8601 format (e.g., `2025-07-16T09:50:00Z`)
-- The job will only process products updated after the `START_DATE` timestamp
-- Supports timezone-aware timestamps (e.g., `2025-07-16T09:50:00+02:00`)
-- Uses optimized GraphQL queries with timestamp filtering
+| Variable              | Description                                                | Required    | Default |
+| --------------------- | ---------------------------------------------------------- | ----------- | ------- |
+| `SHOPIFY_URL`         | Your Shopify store URL (e.g., `your-store.myshopify.com`)  | Yes         | -       |
+| `SHOPIFY_PAT`         | Your Shopify Personal Access Token                         | Yes         | -       |
+| `BR_ENVIRONMENT_NAME` | Bloomreach environment (`staging` or `production`)         | Yes         | -       |
+| `BR_ACCOUNT_ID`       | Your 4-digit Bloomreach account ID                         | Yes         | -       |
+| `BR_CATALOG_NAME`     | Your Bloomreach catalog name                               | Yes         | -       |
+| `BR_API_TOKEN`        | Your Bloomreach API token                                  | Yes         | -       |
+| `BR_OUTPUT_DIR`       | Directory for output files                                 | Yes         | `/export` |
+| `LOGLEVEL`            | Log level                                                  | No          | `INFO`   |
+| `BR_MULTI_MARKET`     | Enable multi-market support (`true` or `false`)            | No          | `false`  |
+| `SHOPIFY_MARKET`      | Shopify market code (required if `BR_MULTI_MARKET=true`)   | Conditional | -       |
+| `SHOPIFY_LANGUAGE`    | Shopify language code (required if `BR_MULTI_MARKET=true`) | Conditional | -       |
+| `AUTO_INDEX`          | Automatically trigger indexing after feed upload (`true` or `false`) | No | `false` |
+| `DELTA_MODE`          | Enable delta feed mode (`true` or `false`)                 | No          | `false`  |
+| `START_DATE`          | Start date for delta feeds (ISO format with timezone)      | No          | -       |
 
 ---
 
-## Running the Container
+## Feed Types
 
-### Docker Run - Full Sync
+### Full Feed (Default)
+Processes all products in your Shopify store and replaces the entire Bloomreach catalog.
 
 ```bash
 docker run -e SHOPIFY_URL=your-store.myshopify.com \
@@ -99,7 +94,8 @@ docker run -e SHOPIFY_URL=your-store.myshopify.com \
   dish-job
 ```
 
-### Docker Run - Delta Sync
+### Delta Feed
+Processes only products that have been updated since a specified date. Much faster for frequent updates.
 
 ```bash
 docker run -e SHOPIFY_URL=your-store.myshopify.com \
@@ -110,109 +106,9 @@ docker run -e SHOPIFY_URL=your-store.myshopify.com \
   -e BR_API_TOKEN=your_bloomreach_token \
   -e BR_OUTPUT_DIR=/export \
   -e DELTA_MODE=true \
-  -e START_DATE=2025-07-16T09:50:00Z \
+  -e START_DATE=2025-07-16T12:00:00+00:00 \
   -v /local/path:/export \
   dish-job
-```
-
-### Docker Compose
-
-Create a `docker-compose.yml` file:
-
-```yaml
-version: '3'
-services:
-  # Full sync job
-  dish-job:
-    image: shopify-bloomreach-integration
-    environment:
-      - SHOPIFY_URL=your-store.myshopify.com
-      - SHOPIFY_PAT=your_pat_token
-      - BR_ENVIRONMENT_NAME=production
-      - BR_ACCOUNT_ID=1234
-      - BR_CATALOG_NAME=your-catalog
-      - BR_API_TOKEN=your_bloomreach_token
-      - BR_OUTPUT_DIR=/export
-      - LOGLEVEL=INFO
-    volumes:
-      - ./export:/export
-
-  # Delta sync job
-  dish-job-delta:
-    image: shopify-bloomreach-integration
-    environment:
-      - SHOPIFY_URL=your-store.myshopify.com
-      - SHOPIFY_PAT=your_pat_token
-      - BR_ENVIRONMENT_NAME=production
-      - BR_ACCOUNT_ID=1234
-      - BR_CATALOG_NAME=your-catalog
-      - BR_API_TOKEN=your_bloomreach_token
-      - BR_OUTPUT_DIR=/export
-      - LOGLEVEL=INFO
-      - DELTA_MODE=true
-      - START_DATE=2025-07-16T09:50:00Z
-    volumes:
-      - ./export:/export
-```
-
-Then run:
-
-```bash
-# For full sync
-docker-compose up dish-job
-
-# For delta sync
-docker-compose up dish-job-delta
-```
-
----
-
-## Delta Sync Mode
-
-Delta sync allows for efficient incremental updates by processing only products that have been modified since a specific timestamp.
-
-### How It Works
-
-1. **GraphQL Query Optimization**: When `DELTA_MODE=true`, the container uses timestamp-filtered queries:
-   ```graphql
-   products (query: "updated_at:>'2025-07-16T09:50:00Z'") {
-     edges {
-       node {
-         id
-         handle
-         title
-         updatedAt
-       }
-     }
-   }
-   ```
-
-2. **Timestamp Handling**: The `START_DATE` is formatted to ISO 8601 standard and truncated to seconds precision for optimal compatibility with Shopify's GraphQL API.
-
-3. **Timezone Support**: Accepts various timestamp formats:
-   - UTC: `2025-07-16T09:50:00Z`
-   - With timezone offset: `2025-07-16T09:50:00+02:00`
-   - Will be properly converted for Shopify API compatibility
-
-### Delta Sync Best Practices
-
-- **Store Last Sync Time**: Keep track of the last successful sync timestamp for the next delta job
-- **Overlap Strategy**: Consider using a small overlap (e.g., subtract 5 minutes) to account for potential timing issues
-- **Frequency**: Run delta syncs frequently (hourly/daily) for near real-time updates
-- **Full Sync Backup**: Schedule periodic full syncs to ensure data integrity
-- **Monitor Results**: Check that expected products are being processed in delta mode
-
-### Example Delta Sync Workflow
-
-```bash
-# Initial full sync
-docker run ... dish-job
-
-# Later delta sync (e.g., from last successful run + 5 min buffer)
-docker run -e DELTA_MODE=true -e START_DATE=2025-07-16T09:45:00Z ... dish-job
-
-# Next delta sync
-docker run -e DELTA_MODE=true -e START_DATE=2025-07-16T11:30:00Z ... dish-job
 ```
 
 ---
@@ -236,7 +132,18 @@ docker run -e SHOPIFY_URL=your-store.myshopify.com \
   dish-job
 ```
 
-**Multi-market + Delta Sync:**
+### Multi-Market Features
+- Fetches translated product titles and descriptions
+- Generates market-specific product URLs
+- Supports market data caching for efficient delta feeds
+- Compatible with both full and delta feed modes
+
+---
+
+## Auto-Indexing
+
+Enable automatic indexing to make your catalog data searchable immediately after upload:
+
 ```bash
 docker run -e SHOPIFY_URL=your-store.myshopify.com \
   -e SHOPIFY_PAT=your_pat_token \
@@ -245,13 +152,40 @@ docker run -e SHOPIFY_URL=your-store.myshopify.com \
   -e BR_CATALOG_NAME=your-catalog \
   -e BR_API_TOKEN=your_bloomreach_token \
   -e BR_OUTPUT_DIR=/export \
-  -e BR_MULTI_MARKET=true \
-  -e SHOPIFY_MARKET=us \
-  -e SHOPIFY_LANGUAGE=en \
-  -e DELTA_MODE=true \
-  -e START_DATE=2025-07-16T09:50:00Z \
+  -e AUTO_INDEX=true \
   -v /local/path:/export \
   dish-job
+```
+
+---
+
+## Docker Compose
+
+Create a `docker-compose.yml` file:
+
+```yaml
+version: '3'
+services:
+  dish-job:
+    image: dish-job
+    environment:
+      - SHOPIFY_URL=your-store.myshopify.com
+      - SHOPIFY_PAT=your_pat_token
+      - BR_ENVIRONMENT_NAME=production
+      - BR_ACCOUNT_ID=1234
+      - BR_CATALOG_NAME=your-catalog
+      - BR_API_TOKEN=your_bloomreach_token
+      - BR_OUTPUT_DIR=/export
+      - LOGLEVEL=INFO
+      - AUTO_INDEX=true
+    volumes:
+      - ./export:/export
+```
+
+Then run:
+
+```bash
+docker-compose up
 ```
 
 ---
@@ -261,48 +195,123 @@ docker run -e SHOPIFY_URL=your-store.myshopify.com \
 During execution, the integration generates several intermediate files in the specified output directory:
 
 * `{timestamp}_{job_id}_shopify_bulk_op.jsonl.gz` – Raw Shopify GraphQL response
+* `{timestamp}_{job_id}_shopify_market_bulk_op.jsonl.gz` – Market data (if multi-market enabled)
 * `{timestamp}_{job_id}_1_shopify_products.jsonl.gz` – Aggregated Shopify products
 * `{timestamp}_{job_id}_2_generic_products.jsonl.gz` – Generic product format
 * `{timestamp}_{job_id}_3_br_products.jsonl.gz` – Bloomreach-specific product format
 * `{timestamp}_{job_id}_4_br_patch.jsonl.gz` – Final Bloomreach patch operations
-
-**Delta sync files** follow the same naming convention but will contain only the subset of products updated since the `START_DATE`.
 
 ---
 
 ## Data Transformation Process
 
 1. **GraphQL Extraction**: Fetches product data including variants, collections, and metafields from Shopify
-   - In delta mode: Applies `updated_at` timestamp filtering
 2. **Shopify Products**: Aggregates related objects into complete product records
 3. **Generic Products**: Transforms to intermediary format with namespace prefixes
 4. **Bloomreach Products**: Maps fields to Bloomreach's expected structure
 5. **Patch Creation**: Formats for Bloomreach's Feed API
+6. **Feed Upload**: Uploads to Bloomreach using PUT (full feeds) or PATCH (delta feeds)
+7. **Indexing** (Optional): Triggers index update to make data searchable
+
+---
+
+## GraphQL Query Selection
+
+The container automatically selects the appropriate GraphQL query based on your configuration:
+
+| Mode | Multi-Market | Query File |
+|------|--------------|------------|
+| Full Feed | No | `export_data_job.graphql` |
+| Full Feed | Yes | `export_data_job_translations.graphql` |
+| Delta Feed | No | `export_data_job_delta.graphql` |
+| Delta Feed | Yes | `export_data_job_delta_translations.graphql` |
+
+---
+
+## Command Line Usage
+
+You can also run the Python script directly:
+
+```bash
+# Full feed
+python main.py \
+  --shopify-url your-store.myshopify.com \
+  --shopify-pat your_pat_token \
+  --br-environment production \
+  --br-account-id 1234 \
+  --br-catalog-name your-catalog \
+  --br-api-token your_br_token \
+  --output-dir /export \
+  --auto-index
+
+# Delta feed
+python main.py \
+  --shopify-url your-store.myshopify.com \
+  --shopify-pat your_pat_token \
+  --br-environment production \
+  --br-account-id 1234 \
+  --br-catalog-name your-catalog \
+  --br-api-token your_br_token \
+  --output-dir /export \
+  --delta-mode \
+  --start-date 2025-07-16T12:00:00+00:00
+
+# Multi-market with delta
+python main.py \
+  --shopify-url your-store.myshopify.com \
+  --shopify-pat your_pat_token \
+  --br-environment production \
+  --br-account-id 1234 \
+  --br-catalog-name your-catalog \
+  --br-api-token your_br_token \
+  --output-dir /export \
+  --multi-market \
+  --shopify-market us \
+  --shopify-language en \
+  --delta-mode \
+  --start-date 2025-07-16T12:00:00+00:00
+```
 
 ---
 
 ## Troubleshooting
 
+### Common Issues
+
 * **Authentication Errors**: Verify your Shopify PAT and Bloomreach API token are correct and have the required scopes
 * **Processing Failures**: Check container logs for detailed error messages
 * **Feed API Errors**: Ensure your Bloomreach account ID and catalog name are accurate
-* **Delta Sync Issues**: 
-  - Verify `START_DATE` format is correct ISO 8601
-  - Check that the timestamp is not too far in the future
-  - Ensure timezone offsets are properly formatted (e.g., `+02:00` not `+2`)
-  - Review GraphQL query parsing in container logs
+* **Memory Issues**: Increase Docker memory allocation for large catalogs (recommended: 4GB+)
+
+### Delta Feed Specific Issues
+
+* **Empty Delta Feeds**: Normal behavior when no products have been updated since the start date
+* **Date Format Errors**: Ensure `START_DATE` is in ISO format with timezone: `YYYY-MM-DDTHH:MM:SS+00:00`
+* **Missing Products**: Verify the start date is not too recent; try extending the time window
+
+### Multi-Market Issues
+
+* **Missing Translations**: Ensure your Shopify store has translations configured for the specified language
+* **Market Data Errors**: Verify your store has multiple markets configured and published
 
 ---
 
-## Limitations
+## Performance Optimization
 
-* All products are processed in a single batch, which may cause timeouts for large catalogs
-* Product variants must have unique SKUs or IDs for correct mapping
-* Custom fields are prefixed to avoid collisions with Bloomreach reserved attributes
-* **Delta sync limitations**:
-  - Only processes products based on `updated_at` timestamp
-  - Does not handle deleted products (use full sync periodically)
-  - Timestamp precision is limited to seconds
+### Memory Usage
+For large catalogs (10,000+ products), allocate at least 4GB of memory to Docker:
+
+```bash
+docker run --memory=4g --memory-swap=4g \
+  -e SHOPIFY_URL=your-store.myshopify.com \
+  # ... other environment variables
+  dish-job
+```
+
+### Delta Feed Benefits
+- **Speed**: 10-100x faster than full feeds for incremental updates
+- **Resource Usage**: Significantly less memory and CPU for small changes
+- **API Limits**: Reduces load on both Shopify and Bloomreach APIs
 
 ---
 

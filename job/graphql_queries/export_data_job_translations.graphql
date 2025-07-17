@@ -18,6 +18,7 @@ mutation ExportDataJob {
                 locale
               }
               createdAt
+              updatedAt
               descriptionHtml
               totalInventory
               onlineStorePreviewUrl
