@@ -1,5 +1,5 @@
 # DiSh Job Kubernetes Deployment
-# Single file containing all necessary resources
+# Single file containing all necessary resources - simplified approach
 
 ---
 apiVersion: v1
@@ -26,17 +26,18 @@ metadata:
   name: dish-config
   namespace: dish-system
 data:
-  # Store configuration
+  # Store configuration - replace with your values
   shopify-url: "your-store.myshopify.com"
   br-environment: "production"  # or "staging"
   br-account-id: "1234"
   br-catalog-name: "your-catalog"
 
-  # Optional settings
+  # Optional settings (matches docker-compose.yml defaults)
   log-level: "INFO"
   auto-index: "true"
   multi-market: "false"
   market-cache-enabled: "true"
+  container-retention-days: "7"
 
 ---
 apiVersion: v1
@@ -52,11 +53,132 @@ spec:
       storage: 5Gi
 
 ---
-# Full Feed Job Template (run manually)
+# API Server Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dish-api
+  namespace: dish-system
+  labels:
+    app: dish-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dish-api
+  template:
+    metadata:
+      labels:
+        app: dish-api
+    spec:
+      containers:
+        - name: dish-api
+          image: dish-api:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+
+          # Resource limits (matches docker-compose defaults)
+          resources:
+            requests:
+              memory: "1Gi"
+              cpu: "500m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+
+          # Environment variables (matches docker-compose.yml)
+          env:
+            - name: DOCKER_IMAGE_TAG
+              value: "dish-job:latest"
+            - name: DOCKER_EXPORT_PATH
+              value: "/export"
+            - name: DOCKER_HOST_PATH
+              value: "/export"
+            - name: DOCKER_MAX_CONNECTIONS
+              value: "20"
+            - name: DOCKER_CONNECTION_TIMEOUT
+              value: "30"
+            - name: DOCKER_RESPONSE_TIMEOUT
+              value: "45"
+            - name: DOCKER_LOG_TIMEOUT
+              value: "3000"
+            - name: DOCKER_CONTAINER_RETENTION_DAYS
+              valueFrom:
+                configMapKeyRef:
+                  name: dish-config
+                  key: container-retention-days
+            - name: DISH_SECURITY_ENABLED
+              value: "true"
+            - name: DISH_SECURITY_ACCESS_TOKEN
+              value: "dish-secret-token-change-me-123"  # CHANGE THIS!
+            - name: DISH_DELTA_TRACKER_FILE
+              value: "./delta-job-tracker.json"
+            - name: DISH_CONTAINER_CLEANUP_CRON
+              value: "0 0 2 * * ?"
+            - name: DOCKER_MARKET_CACHE_ENABLED
+              valueFrom:
+                configMapKeyRef:
+                  name: dish-config
+                  key: market-cache-enabled
+            - name: DOCKER_MARKET_CACHE_MAX_AGE_HOURS
+              value: "24"
+            - name: SERVER_PORT
+              value: "8081"
+            - name: LOGGING_LEVEL_COM_BLOOMREACH
+              valueFrom:
+                configMapKeyRef:
+                  name: dish-config
+                  key: log-level
+
+          # Storage mount
+          volumeMounts:
+            - name: export-volume
+              mountPath: /export
+
+          # Health check
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 30
+            periodSeconds: 10
+
+      volumes:
+        - name: export-volume
+          persistentVolumeClaim:
+            claimName: dish-storage
+
+---
+# Service for API Server
+apiVersion: v1
+kind: Service
+metadata:
+  name: dish-api-service
+  namespace: dish-system
+  labels:
+    app: dish-api
+spec:
+  type: ClusterIP
+  ports:
+    - port: 8081
+      targetPort: 8081
+      protocol: TCP
+  selector:
+    app: dish-api
+
+---
+# Job Template for Manual Full Feed (create jobs from this template)
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: dish-full-feed
+  name: dish-full-feed-template
   namespace: dish-system
   labels:
     app: dish-job
@@ -69,6 +191,7 @@ spec:
     metadata:
       labels:
         app: dish-job
+        type: full-feed
     spec:
       restartPolicy: Never
       containers:
@@ -76,7 +199,7 @@ spec:
           image: dish-job:latest
           imagePullPolicy: IfNotPresent
 
-          # Resource limits
+          # Resource limits (matches docker-compose behavior)
           resources:
             requests:
               memory: "2Gi"
@@ -85,7 +208,7 @@ spec:
               memory: "4Gi"
               cpu: "1000m"
 
-          # Environment variables from ConfigMap
+          # Environment variables from ConfigMap and Secret
           env:
             - name: SHOPIFY_URL
               valueFrom:
@@ -122,8 +245,6 @@ spec:
                 configMapKeyRef:
                   name: dish-config
                   key: multi-market
-
-            # Environment variables from Secret
             - name: SHOPIFY_PAT
               valueFrom:
                 secretKeyRef:
@@ -134,14 +255,11 @@ spec:
                 secretKeyRef:
                   name: dish-secrets
                   key: bloomreach-token
-
-            # Fixed environment variables
             - name: BR_OUTPUT_DIR
               value: "/export"
             - name: DELTA_MODE
               value: "false"
 
-          # Storage mount
           volumeMounts:
             - name: export-volume
               mountPath: /export
@@ -150,111 +268,3 @@ spec:
         - name: export-volume
           persistentVolumeClaim:
             claimName: dish-storage
-
----
-# Delta Feed CronJob (runs automatically every 15 minutes)
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: dish-delta-feed
-  namespace: dish-system
-  labels:
-    app: dish-job
-    type: delta-feed
-spec:
-  schedule: "*/15 * * * *"  # Every 15 minutes
-  concurrencyPolicy: Forbid  # Don't run overlapping jobs
-  successfulJobsHistoryLimit: 3
-  failedJobsHistoryLimit: 3
-
-  jobTemplate:
-    spec:
-      ttlSecondsAfterFinished: 3600  # Auto-delete after 1 hour
-      backoffLimit: 1
-      activeDeadlineSeconds: 3600  # 1 hour timeout
-
-      template:
-        metadata:
-          labels:
-            app: dish-job
-            type: delta-feed
-        spec:
-          restartPolicy: Never
-          containers:
-            - name: dish-job
-              image: dish-job:latest
-              imagePullPolicy: IfNotPresent
-
-              # Lower resources for delta feeds
-              resources:
-                requests:
-                  memory: "1Gi"
-                  cpu: "250m"
-                limits:
-                  memory: "2Gi"
-                  cpu: "500m"
-
-              # Same environment as full feed, but with delta mode enabled
-              env:
-                - name: SHOPIFY_URL
-                  valueFrom:
-                    configMapKeyRef:
-                      name: dish-config
-                      key: shopify-url
-                - name: BR_ENVIRONMENT_NAME
-                  valueFrom:
-                    configMapKeyRef:
-                      name: dish-config
-                      key: br-environment
-                - name: BR_ACCOUNT_ID
-                  valueFrom:
-                    configMapKeyRef:
-                      name: dish-config
-                      key: br-account-id
-                - name: BR_CATALOG_NAME
-                  valueFrom:
-                    configMapKeyRef:
-                      name: dish-config
-                      key: br-catalog-name
-                - name: LOGLEVEL
-                  valueFrom:
-                    configMapKeyRef:
-                      name: dish-config
-                      key: log-level
-                - name: AUTO_INDEX
-                  valueFrom:
-                    configMapKeyRef:
-                      name: dish-config
-                      key: auto-index
-                - name: MARKET_CACHE_ENABLED
-                  valueFrom:
-                    configMapKeyRef:
-                      name: dish-config
-                      key: market-cache-enabled
-                - name: SHOPIFY_PAT
-                  valueFrom:
-                    secretKeyRef:
-                      name: dish-secrets
-                      key: shopify-pat
-                - name: BR_API_TOKEN
-                  valueFrom:
-                    secretKeyRef:
-                      name: dish-secrets
-                      key: bloomreach-token
-
-                # Delta-specific settings
-                - name: BR_OUTPUT_DIR
-                  value: "/export"
-                - name: DELTA_MODE
-                  value: "true"
-                - name: START_DATE
-                  value: "$(date -u -d '15 minutes ago' +%Y-%m-%dT%H:%M:%S+00:00)"
-
-              volumeMounts:
-                - name: export-volume
-                  mountPath: /export
-
-          volumes:
-            - name: export-volume
-              persistentVolumeClaim:
-                claimName: dish-storage
