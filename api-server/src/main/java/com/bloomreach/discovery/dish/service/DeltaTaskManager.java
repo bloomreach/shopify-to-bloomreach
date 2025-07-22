@@ -8,7 +8,6 @@ import org.springframework.scheduling.TaskScheduler;
 import org.springframework.scheduling.support.CronTrigger;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -32,13 +31,11 @@ public class DeltaTaskManager {
         final String taskId;
         final DeltaScheduleDTO config;
         final ScheduledFuture<?> future;
-        final LocalDateTime createdAt;
 
         ScheduledTask(String taskId, DeltaScheduleDTO config, ScheduledFuture<?> future) {
             this.taskId = taskId;
             this.config = config;
             this.future = future;
-            this.createdAt = LocalDateTime.now();
         }
     }
 
@@ -48,7 +45,13 @@ public class DeltaTaskManager {
 
         log.info("Scheduling delta job for catalog: {}, interval: {}", catalogKey, config.deltaInterval());
 
-        Runnable task = () -> deltaJobRunner.runDeltaJob(config);
+        Runnable task = () -> {
+            try {
+                deltaJobRunner.runDeltaJob(config);
+            } catch (Exception e) {
+                log.error("Delta job execution failed for catalog: {}", catalogKey, e);
+            }
+        };
         
         ScheduledFuture<?> future = taskScheduler.schedule(task, new CronTrigger(config.deltaInterval().getCronExpression()));
         
@@ -65,6 +68,7 @@ public class DeltaTaskManager {
             log.info("Delta job {} cancelled: {}", taskId, cancelled);
             return cancelled;
         }
+        log.warn("Delta job {} not found for cancellation", taskId);
         return false;
     }
 
@@ -73,10 +77,7 @@ public class DeltaTaskManager {
                 .map(task -> new DeltaTaskInfo(
                         task.taskId,
                         task.config.getCatalogKey(),
-                        task.config.deltaInterval(),
-                        task.createdAt,
-                        null, // We don't track last run here, could be enhanced
-                        false // We don't track running status here, could be enhanced
+                        task.config.deltaInterval()
                 ))
                 .toList();
     }

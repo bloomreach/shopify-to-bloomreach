@@ -9,14 +9,11 @@ import org.springframework.stereotype.Service;
 
 import java.io.File;
 import java.io.IOException;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-
-import java.time.Instant;
-import java.time.format.DateTimeFormatter;
 
 @Service
 @Slf4j
@@ -33,14 +30,12 @@ public class DeltaJobTracker {
     }
 
     public static class JobInfo {
-    public Instant lastSuccessfulRun;  // Changed from LocalDateTime
-        public boolean isRunning = false;
+        public Instant lastSuccessfulRun;
         
         public JobInfo() {}
         
-    public JobInfo(Instant lastSuccessfulRun, boolean isRunning) {
+        public JobInfo(Instant lastSuccessfulRun) {
             this.lastSuccessfulRun = lastSuccessfulRun;
-            this.isRunning = isRunning;
         }
     }
 
@@ -75,32 +70,18 @@ public class DeltaJobTracker {
         }
     }
 
-    public Instant getLastSuccessfulRun(String catalogKey) {  // Changed return type
+    public Instant getLastSuccessfulRun(String catalogKey) {
         Map<String, JobInfo> data = loadData();
         JobInfo info = data.get(catalogKey);
         return info != null ? info.lastSuccessfulRun : null;
     }
 
-    public boolean isJobRunning(String catalogKey) {
-        Map<String, JobInfo> data = loadData();
-        JobInfo info = data.get(catalogKey);
-        return info != null && info.isRunning;
-    }
-
-    public void setJobRunning(String catalogKey, boolean running) {
-        Map<String, JobInfo> data = loadData();
-        JobInfo info = data.computeIfAbsent(catalogKey, k -> new JobInfo());
-        info.isRunning = running;
-        data.put(catalogKey, info);
-        saveData(data);
-    }
-
-    public void updateLastSuccessfulRun(String catalogKey, Instant timestamp) {  // Changed parameter type
+    public void updateLastSuccessfulRun(String catalogKey, Instant timestamp) {
         Map<String, JobInfo> data = loadData();
         JobInfo info = data.computeIfAbsent(catalogKey, k -> new JobInfo());
         info.lastSuccessfulRun = timestamp;
-        info.isRunning = false;
         data.put(catalogKey, info);
         saveData(data);
+        log.debug("Updated last successful run for catalog {}: {}", catalogKey, timestamp);
     }
 }

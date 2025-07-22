@@ -6,9 +6,7 @@ import com.bloomreach.discovery.dish.dto.DishConfigDTO;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDateTime;
 import java.time.Instant;
-import java.time.format.DateTimeFormatter;
 
 @Service
 @Slf4j
@@ -22,20 +20,11 @@ public class DeltaJobRunner {
         this.deltaJobTracker = deltaJobTracker;
     }
 
-
     public void runDeltaJob(DeltaScheduleDTO config) {
         String catalogKey = config.getCatalogKey();
-
         log.info("Starting delta job for catalog: {}", catalogKey);
 
-        if (deltaJobTracker.isJobRunning(catalogKey)) {
-            log.warn("Delta job for catalog {} is already running, skipping this execution", catalogKey);
-            return;
-        }
-
         try {
-            deltaJobTracker.setJobRunning(catalogKey, true);
-
             // Calculate start date in UTC
             Instant startDate = calculateStartDate(catalogKey, config.deltaInterval().getIntervalMinutes());
             Instant jobStartTime = Instant.now(); // Capture when job actually starts
@@ -47,16 +36,14 @@ public class DeltaJobRunner {
 
             log.info("Delta job container created: {} for catalog: {}", jobName, catalogKey);
 
-            // Update last successful run to the job start time (not current time)
-            // This prevents the time window from advancing until the job actually starts
+            // Update last successful run to the job start time
             deltaJobTracker.updateLastSuccessfulRun(catalogKey, jobStartTime);
 
             log.info("Updated last successful run time to job start time: {}", jobStartTime);
 
         } catch (Exception e) {
             log.error("Failed to run delta job for catalog: {}", catalogKey, e);
-            // Mark job as not running on failure
-            deltaJobTracker.setJobRunning(catalogKey, false);
+            throw e; // Re-throw to let the scheduler handle the error
         }
     }
 

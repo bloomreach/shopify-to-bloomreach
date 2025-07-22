@@ -1,0 +1,66 @@
+version: '3.8'
+
+services:
+  # Job Image Builder (builds the job image that the API server will use)
+  dish-job:
+    build:
+      context: ./job
+      dockerfile: Dockerfile
+    image: dish-job:latest
+    command: echo "Job image built successfully"
+    volumes:
+      - ./export:/export
+
+  # API Server (Spring Boot)
+  dish-api:
+    build:
+      context: ./api-server
+      dockerfile: Dockerfile
+    image: dish-api:latest
+    ports:
+      - "8081:8081"
+    volumes:
+      # Mount Docker socket to allow API server to create job containers
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Mount export directory for job outputs
+      - ./export:/export
+    environment:
+      # Docker configuration
+      - DOCKER_IMAGE_TAG=dish-job:latest
+      - DOCKER_HOST_PATH=${PWD}/export
+      - DOCKER_EXPORT_PATH=/export
+      - DOCKER_MAX_CONNECTIONS=20
+      - DOCKER_CONNECTION_TIMEOUT=30
+      - DOCKER_RESPONSE_TIMEOUT=45
+      - DOCKER_LOG_TIMEOUT=3000
+      - DOCKER_CONTAINER_RETENTION_DAYS=7
+
+      # Security configuration (change this token!)
+      - DISH_SECURITY_ENABLED=true
+      - DISH_SECURITY_ACCESS_TOKEN=dish-secret-token-change-me-123
+
+      # Delta job configuration
+      - DISH_DELTA_TRACKER_FILE=./delta-job-tracker.json
+      - DISH_CONTAINER_CLEANUP_CRON=0 0 2 * * ?
+
+      # Market cache settings
+      - DOCKER_MARKET_CACHE_ENABLED=true
+      - DOCKER_MARKET_CACHE_MAX_AGE_HOURS=24
+
+      # Spring Boot configuration
+      - SERVER_PORT=8081
+      - LOGGING_LEVEL_COM_BLOOMREACH=INFO
+    depends_on:
+      - dish-job
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8081/actuator/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  # This will create the export directory automatically
+  export-data:
+    driver: local

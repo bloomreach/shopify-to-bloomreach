@@ -83,6 +83,7 @@ Set the following environment variables before running the container:
 Processes all products in your Shopify store and replaces the entire Bloomreach catalog.
 
 ```bash
+docker build -t dish-job .
 docker run -e SHOPIFY_URL=your-store.myshopify.com \
   -e SHOPIFY_PAT=your_pat_token \
   -e BR_ENVIRONMENT_NAME=production \
@@ -159,37 +160,6 @@ docker run -e SHOPIFY_URL=your-store.myshopify.com \
 
 ---
 
-## Docker Compose
-
-Create a `docker-compose.yml` file:
-
-```yaml
-version: '3'
-services:
-  dish-job:
-    image: dish-job
-    environment:
-      - SHOPIFY_URL=your-store.myshopify.com
-      - SHOPIFY_PAT=your_pat_token
-      - BR_ENVIRONMENT_NAME=production
-      - BR_ACCOUNT_ID=1234
-      - BR_CATALOG_NAME=your-catalog
-      - BR_API_TOKEN=your_bloomreach_token
-      - BR_OUTPUT_DIR=/export
-      - LOGLEVEL=INFO
-      - AUTO_INDEX=true
-    volumes:
-      - ./export:/export
-```
-
-Then run:
-
-```bash
-docker-compose up
-```
-
----
-
 ## Output Files
 
 During execution, the integration generates several intermediate files in the specified output directory:
@@ -200,6 +170,8 @@ During execution, the integration generates several intermediate files in the sp
 * `{timestamp}_{job_id}_2_generic_products.jsonl.gz` – Generic product format
 * `{timestamp}_{job_id}_3_br_products.jsonl.gz` – Bloomreach-specific product format
 * `{timestamp}_{job_id}_4_br_patch.jsonl.gz` – Final Bloomreach patch operations
+
+When using Docker Compose, these files are stored in the `./export/` directory on your host machine.
 
 ---
 

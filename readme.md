@@ -22,14 +22,14 @@ This project enables automated synchronization of Shopify product data into a Bl
     * Manages security and cleanup via configurable cron jobs.
     * Provides automatic indexing capabilities.
 
-These components are **loosely coupled** and can be run independently.
+These components are **loosely coupled** and can be run independently or together using Docker Compose.
 
 ---
 
 ## 🧱 Tech Stack
 
 * **Languages:** Python (ETL job), Java (Spring Boot API server)
-* **Containerization:** Docker
+* **Containerization:** Docker & Docker Compose
 * **APIs:** Shopify GraphQL, Bloomreach Feed API, Bloomreach Index API
 * **Job Triggering:** REST API with token-based security
 * **Scheduling:** Spring Boot dynamic scheduling with cron expressions
@@ -37,7 +37,101 @@ These components are **loosely coupled** and can be run independently.
 
 ---
 
-## 📦 Docker Job (Python) – `job/`
+## 🐳 Docker Compose Setup (Recommended)
+
+The easiest way to run the entire project is using Docker Compose.
+
+### Quick Start
+
+```bash
+# 1. Create export directory (optional - Docker creates it automatically)
+mkdir -p export
+
+# 2. Start everything
+docker-compose up --build
+```
+
+This will:
+- Build the job container (`dish-job:latest`)
+- Build the API server (`dish-api:latest`) 
+- Start the API server on http://localhost:8081
+- Configure shared storage and networking
+- Set up automatic cleanup and monitoring
+
+### API Access
+
+- **API Server**: http://localhost:8081
+- **Swagger UI**: http://localhost:8081/swagger-ui/
+- **Health Check**: http://localhost:8081/actuator/health
+
+### Change Security Token
+
+**Important**: Update the security token in `docker-compose.yml`:
+
+```yaml
+environment:
+  - DISH_SECURITY_ACCESS_TOKEN=your-own-secret-token-here
+```
+
+### Example API Usage
+
+```bash
+# Create a full feed job
+curl -X POST http://localhost:8081/dish/createJob \
+  -H "Content-Type: application/json" \
+  -H "x-dish-access-token: your-own-secret-token-here" \
+  -d '{
+    "shopifyUrl": "your-store.myshopify.com",
+    "shopifyPat": "your_pat_token",
+    "brEnvironmentName": "production",
+    "brAccountId": "1234",
+    "brCatalogName": "your-catalog",
+    "brApiToken": "your_br_token",
+    "autoIndex": true
+  }'
+
+# Schedule a delta feed (runs automatically every 15 minutes)
+curl -X POST http://localhost:8081/dish/scheduleDeltaJob \
+  -H "Content-Type: application/json" \
+  -H "x-dish-access-token: your-own-secret-token-here" \
+  -d '{
+    "shopifyUrl": "your-store.myshopify.com",
+    "shopifyPat": "your_pat_token",
+    "brEnvironmentName": "production",
+    "brAccountId": "1234",
+    "brCatalogName": "your-catalog",
+    "brApiToken": "your_br_token",
+    "autoIndex": true,
+    "deltaInterval": "EVERY_15_MINUTES"
+  }'
+```
+
+### Common Commands
+
+```bash
+# Start services in background
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop services
+docker-compose down
+
+# Rebuild and restart
+docker-compose up --build
+
+# Check status
+docker-compose ps
+```
+
+---
+
+## 📦 Individual Component Usage
+
+You can also run each component independently:
+
+### Docker Job (Python) – `job/`
 
 This container automates:
 
@@ -46,7 +140,7 @@ This container automates:
 3. Uploading to Bloomreach via the Feed API (PUT for full feeds, PATCH for delta feeds).
 4. Optional automatic indexing after successful data upload.
 
-### Required Environment Variables
+#### Required Environment Variables
 
 | Variable              | Description                                        | Required    |
 | --------------------- | -------------------------------------------------- | ----------- |
@@ -64,33 +158,33 @@ This container automates:
 | `DELTA_MODE`          | `true` for incremental updates                     | No          |
 | `START_DATE`          | Start date for delta feeds (ISO format)            | No          |
 
-### Feed Types
+#### Feed Types
 
-#### Full Feed (Default)
+**Full Feed (Default)**:
 - Replaces entire product catalog
 - Uses HTTP PUT to Bloomreach
 - Processes all products in the store
 
-#### Delta Feed
+**Delta Feed**:
 - Only processes products updated since last run
 - Uses HTTP PATCH to Bloomreach
 - Much faster for frequent updates
 - Automatically calculates date ranges with 30-second overlap
 
-### Multi-Market Support
+#### Multi-Market Support
 
 For stores with multiple markets and translations:
 - Fetches market-specific product URLs
 - Includes translated product titles and descriptions
 - Supports market data caching for efficient delta feeds
 
----
-
-### Example Run
+#### Example Standalone Run
 
 ```bash
-# Full feed
+# Build job image
 docker build -t dish-job ./job
+
+# Full feed
 docker run --rm -v $(pwd)/export:/export \
   -e SHOPIFY_URL=shop.myshopify.com \
   -e SHOPIFY_PAT=your_token \
@@ -100,19 +194,6 @@ docker run --rm -v $(pwd)/export:/export \
   -e BR_API_TOKEN=br_token \
   -e BR_OUTPUT_DIR=/export \
   -e AUTO_INDEX=true \
-  dish-job
-
-# Delta feed
-docker run --rm -v $(pwd)/export:/export \
-  -e SHOPIFY_URL=shop.myshopify.com \
-  -e SHOPIFY_PAT=your_token \
-  -e BR_ENVIRONMENT_NAME=production \
-  -e BR_ACCOUNT_ID=1234 \
-  -e BR_CATALOG_NAME=my-catalog \
-  -e BR_API_TOKEN=br_token \
-  -e BR_OUTPUT_DIR=/export \
-  -e DELTA_MODE=true \
-  -e START_DATE=2025-07-16T12:00:00+00:00 \
   dish-job
 ```
 
@@ -149,18 +230,6 @@ The API server provides an interface for programmatically managing ingestion job
 * **Auto-indexing**: Optional automatic index triggering after successful feeds
 * **Automatic cleanup**: Scheduled removal of old containers
 
-### Security
-
-Enable token-based access with this config:
-
-```yaml
-dish:
-  security:
-    enabled: true
-    access:
-      token: your-secret-token
-```
-
 ### API Endpoints
 
 #### Job Management
@@ -182,49 +251,23 @@ dish:
 - `EVERY_6_HOURS` - Every 6 hours
 - `EVERY_12_HOURS` - Every 12 hours
 
-### Build & Run
+### Standalone Build & Run
 
 ```bash
 cd api-server
 mvn clean package
-docker build -t dish-app .
-docker run -d -p 8080:8080 \
+docker build -t dish-api .
+docker run -d -p 8081:8081 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e DISH_SECURITY_ACCESS_TOKEN=your-secret-token \
-  dish-app
-```
-
-Swagger UI will be available at:
-[http://localhost:8080/swagger-ui/](http://localhost:8080/swagger-ui/)
-
-### Configuration
-
-```yaml
-# application.yml
-docker:
-  imageTag: dish-job:latest
-  exportPath: /export
-  hostPath: /path/to/host/directory
-  containerRetentionDays: 7
-
-dish:
-  security:
-    enabled: true
-    access:
-      token: your-secret-token
-  container:
-    cleanup:
-      cron: "0 0 2 * * ?"  # Daily at 2 AM
-  delta:
-    tracker:
-      file: ./delta-job-tracker.json
+  dish-api
 ```
 
 ---
 
 ## 🗂 Output Artifacts
 
-All intermediate and final files are stored in `/export`:
+All intermediate and final files are stored in `/export` (or `./export` when using Docker Compose):
 
 * `*_shopify_bulk_op.jsonl.gz` – Raw Shopify GraphQL export
 * `*_shopify_market_bulk_op.jsonl.gz` – Market data (if multi-market enabled)
@@ -244,7 +287,6 @@ All intermediate and final files are stored in `/export`:
 3. **Date Calculation**: Automatic calculation of start dates with 30-second overlap for safety
 4. **GraphQL Filtering**: Uses Shopify's `updated_at:>` query parameter to fetch only changed products
 5. **API Method**: Uses HTTP PATCH instead of PUT for incremental updates
-6. **Conflict Handling**: Skips execution if previous delta job is still running
 
 ### Delta Feed Benefits
 
@@ -273,49 +315,13 @@ The system automatically selects the appropriate GraphQL query based on configur
 
 ---
 
-## 📝 Example API Usage
-
-### Schedule a Delta Feed
-
-```bash
-curl -X POST http://localhost:8080/dish/scheduleDeltaJob \
-  -H "Content-Type: application/json" \
-  -H "x-dish-access-token: your-secret-token" \
-  -d '{
-    "shopifyUrl": "your-store.myshopify.com",
-    "shopifyPat": "your_pat_token",
-    "brEnvironmentName": "production",
-    "brAccountId": "1234",
-    "brCatalogName": "your-catalog",
-    "brApiToken": "your_br_token",
-    "brMultiMarket": false,
-    "autoIndex": true,
-    "deltaInterval": "EVERY_15_MINUTES"
-  }'
-```
-
-### Check Delta Tasks
-
-```bash
-curl -X GET http://localhost:8080/dish/deltaTasks \
-  -H "x-dish-access-token: your-secret-token"
-```
-
-### Cancel Delta Task
-
-```bash
-curl -X DELETE http://localhost:8080/dish/deltaTasks/{taskId} \
-  -H "x-dish-access-token: your-secret-token"
-```
-
----
-
 ## 🧪 Development Notes
 
 * The `combine.py` script is provided to concatenate source files for auditing or documentation purposes.
 * Use it to generate a readable `combined_output.txt` containing the full source.
 * Delta feed schedules are lost on application restart (designed for simplicity).
 * Container cleanup runs daily to prevent resource accumulation.
+* When using Docker Compose, update the security token in `docker-compose.yml`.
 
 ---
 
@@ -334,6 +340,31 @@ curl -X DELETE http://localhost:8080/dish/deltaTasks/{taskId} \
 * **Duplicate Products**: Check that date formats are correct (`YYYY-MM-DDTHH:MM:SS+00:00`)
 * **Missing Updates**: Verify 30-second overlap is sufficient for your update frequency
 * **Scheduling Issues**: Confirm cron expressions are valid and timezone-aware
+
+### Docker Compose Issues
+
+* **Services won't start**: Check if Docker is running and port 8081 is available
+* **API can't create jobs**: Verify Docker socket is mounted correctly
+* **Permission issues**: Fix export directory permissions with `chmod 755 export/`
+
+### Debug Commands
+
+```bash
+# View all logs
+docker-compose logs -f
+
+# Check service status  
+docker-compose ps
+
+# Get shell access to API server
+docker-compose exec dish-api /bin/bash
+
+# View specific container logs
+docker-compose logs dish-api
+
+# Check if job image was built
+docker images | grep dish-job
+```
 
 ---
 
